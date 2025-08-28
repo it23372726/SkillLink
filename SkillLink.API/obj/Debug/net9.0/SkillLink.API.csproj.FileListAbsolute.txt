@@ -47,3 +47,11 @@
 /Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/runtimes/win-x64/native/krb5_64.dll
 /Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/runtimes/win-x64/native/krbcc64.dll
 /Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/runtimes/win/lib/net8.0/System.Windows.Extensions.dll
+/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/Microsoft.AspNetCore.Authentication.JwtBearer.dll
+/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/Microsoft.IdentityModel.Abstractions.dll
+/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/Microsoft.IdentityModel.JsonWebTokens.dll
+/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/Microsoft.IdentityModel.Logging.dll
+/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/Microsoft.IdentityModel.Protocols.dll
+/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/Microsoft.IdentityModel.Protocols.OpenIdConnect.dll
+/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/Microsoft.IdentityModel.Tokens.dll
+/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/System.IdentityModel.Tokens.Jwt.dll
