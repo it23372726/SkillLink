@@ -8,5 +8,7 @@ namespace SkillLink.API.Models
         public DateTime? ScheduledAt { get; set; }   // can be null until scheduled
         public string Status { get; set; } = "PENDING";
         public DateTime CreatedAt { get; set; }
+
+        public string RoomName => $"SkillLinkSession_{SessionId}";
     }
 }
