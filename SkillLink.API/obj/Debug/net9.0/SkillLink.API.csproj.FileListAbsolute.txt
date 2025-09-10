@@ -55,3 +55,15 @@
 /Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/Microsoft.IdentityModel.Protocols.OpenIdConnect.dll
 /Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/Microsoft.IdentityModel.Tokens.dll
 /Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/System.IdentityModel.Tokens.Jwt.dll
+/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/package-lock.json
+/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/package.json
+/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/Microsoft.AspNetCore.Authorization.dll
+/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/Microsoft.AspNetCore.Metadata.dll
+/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/Microsoft.Extensions.DependencyInjection.Abstractions.dll
+/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/Microsoft.Extensions.Logging.Abstractions.dll
+/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/Microsoft.Extensions.Options.dll
+/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/Microsoft.Extensions.Primitives.dll
+/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/Newtonsoft.Json.dll
+/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/System.Net.WebSockets.WebSocketProtocol.dll
+/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/bin/Debug/net9.0/SkillLink.API.staticwebassets.runtime.json
+/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/obj/Debug/net9.0/SkillLink.API.sourcelink.json
