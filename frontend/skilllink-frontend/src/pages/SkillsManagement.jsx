@@ -58,68 +58,6 @@ const MacButton = ({ className = "", children, ...props }) => (
   </button>
 );
 
-const MacPrimary = (props) => (
-  <button
-    {...props}
-    className={
-      "px-4 py-2 rounded-xl text-sm transition text-white " +
-      "bg-blue-600 hover:bg-blue-700 active:bg-blue-800 " +
-      "focus:outline-none focus:ring-2 focus:ring-blue-400/40 " +
-      (props.className || "")
-    }
-  />
-);
-const MacDanger = (props) => (
-  <button
-    {...props}
-    className={
-      "px-4 py-2 rounded-xl text-sm transition text-white " +
-      "bg-red-600 hover:bg-red-700 active:bg-red-800 " +
-      "focus:outline-none focus:ring-2 focus:ring-red-400/40 " +
-      (props.className || "")
-    }
-  />
-);
-
-const MacToggle = ({ checked, onChange, disabled }) => (
-  <button
-    type="button"
-    disabled={disabled}
-    onClick={onChange}
-    aria-pressed={checked}
-    className={
-      "relative inline-flex h-7 w-12 items-center rounded-full transition-colors " +
-      (checked
-        ? "bg-gradient-to-b from-emerald-400 to-emerald-500"
-        : "bg-gradient-to-b from-slate-200 to-slate-300 dark:from-ink-700 dark:to-ink-800") +
-      " disabled:opacity-60"
-    }
-  >
-    <span
-      className={
-        "inline-block h-6 w-6 transform rounded-full bg-white shadow transition-transform " +
-        (checked ? "translate-x-5" : "translate-x-1")
-      }
-    />
-  </button>
-);
-
-const Chip = ({ children, className = "" }) => (
-  <span className={"px-2.5 py-1 text-xs font-medium rounded-full border border-white/30 dark:border-white/10 " + className}>
-    {children}
-  </span>
-);
-
-const SectionCard = ({ title, action, children }) => (
-  <GlassCard className="p-6">
-    <div className="flex items-center justify-between border-b border-black/10 dark:border-white/10 pb-4 mb-4">
-      <h3 className="text-lg font-semibold text-ink-800 dark:text-ink-100">{title}</h3>
-      {action}
-    </div>
-    <div>{children}</div>
-  </GlassCard>
-);
-
 const levels = ["Beginner", "Intermediate", "Advanced", "Expert"];
 
 const levelPill = (level) => {
@@ -202,6 +140,10 @@ const SkillsManagement = () => {
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
+
+  useEffect(() => {
+    loadSkills();
+  }, [loadSkills]); // <-- add 'loadSkills' to dependency array
 
   // --- loaders ---
   const loadSkills = async () => {
