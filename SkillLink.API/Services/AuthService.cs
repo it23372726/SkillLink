@@ -186,18 +186,24 @@ namespace SkillLink.API.Services
 
             cmd.ExecuteNonQuery();
 
-            // Send verification email
-            var apiBase = _config["Api:BaseUrl"] ?? "http://localhost:5159";
-            var verifyUrl = $"{apiBase}/api/auth/verify-email?token={Uri.EscapeDataString(token)}";
+            try
+            {
+                var apiBase = _config["Api:BaseUrl"] ?? "http://localhost:5159";
+                var verifyUrl = $"{apiBase}/api/auth/verify-email?token={Uri.EscapeDataString(token)}";
 
-            var html = $@"
-                <h2>Verify your email</h2>
-                <p>Hi {WebUtility.HtmlEncode(req.FullName)},</p>
-                <p>Thanks for registering at SkillLink. Please verify your email by clicking the link below:</p>
-                <p><a href=""{verifyUrl}"">Verify my email</a></p>
-                <p>This link will expire in 24 hours.</p>";
+                var html = $@"
+                    <h2>Verify your email</h2>
+                    <p>Hi {WebUtility.HtmlEncode(req.FullName)},</p>
+                    <p>Thanks for registering at SkillLink. Please verify your email by clicking the link below:</p>
+                    <p><a href=""{verifyUrl}"">Verify my email</a></p>
+                    <p>This link will expire in 24 hours.</p>";
 
-            _email.SendAsync(req.Email, "Verify your SkillLink email", html).GetAwaiter().GetResult();
+                _email.SendAsync(req.Email, "Verify your SkillLink email", html).GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Email send failed: {ex.Message}");
+            }
         }
 
         // ------------------- Verify Email -------------------
@@ -353,6 +359,16 @@ namespace SkillLink.API.Services
             cmd.Parameters.AddWithValue("@id", userId);
 
             return cmd.ExecuteNonQuery() > 0;
+        }
+
+        // --- Delete User ---
+        public void DeleteUserFromDB(int id){
+            using var conn = _dbHelper.GetConnection();
+            conn.Open();
+
+            using var cmd = new MySqlCommand("DELETE FROM Users WHERE UserId = @id" ,conn);
+            cmd.Parameters.AddWithValue("@id" , id);
+            cmd.ExecuteNonQuery();
         }
     }
 }

@@ -198,6 +198,21 @@ namespace SkillLink.API.Controllers
             });
         }
 
+         [Authorize]
+         [HttpDelete("delete")]
+         public IActionResult DeleteUser(int id){
+            try
+            {
+                _authService.DeleteUserFromDB(id);
+                return Ok( new {message = "User deleted!"});
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+
+         }
+
     }
 }
 
