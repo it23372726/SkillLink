@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("SkillLink.Tests")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+c8cc266c807e9dcc2e2d23d37f8a4591eee6eaac")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+69bdbe72823b068b93a0be56bb1dc0732ad55b5f")]
 [assembly: System.Reflection.AssemblyProductAttribute("SkillLink.Tests")]
 [assembly: System.Reflection.AssemblyTitleAttribute("SkillLink.Tests")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
