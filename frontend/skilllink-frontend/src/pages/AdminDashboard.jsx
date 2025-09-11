@@ -84,18 +84,6 @@ const MacButton = ({ children, className = "", ...props }) => (
   </button>
 );
 
-const MacPrimary = (props) => (
-  <button
-    {...props}
-    className={
-      "px-4 py-2 rounded-xl text-sm font-medium text-white " +
-      "bg-blue-600 hover:bg-blue-700 active:bg-blue-800 " +
-      "focus:outline-none focus:ring-2 focus:ring-blue-400/40 " +
-      (props.className || "")
-    }
-  />
-);
-
 const MacDanger = (props) => (
   <button
     {...props}
@@ -283,7 +271,7 @@ const AdminDashboard = () => {
     // eslint-disable-next-line
   }, []);
 
-  const debouncedLoad = useMemo(() => debounce(load, 500), []);
+  const debouncedLoad = useMemo(() => debounce(load, 500), [load]);
 
   // close bulk dropdown on outside click / ESC
   useEffect(() => {
