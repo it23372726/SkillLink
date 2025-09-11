@@ -1,20 +1,20 @@
 {
   "format": 1,
   "restore": {
-    "/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/SkillLink.API.csproj": {}
+    "/Users/dulajachintha/Documents/University/SkillLink/SkillLink.API/SkillLink.API.csproj": {}
   },
   "projects": {
-    "/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/SkillLink.API.csproj": {
+    "/Users/dulajachintha/Documents/University/SkillLink/SkillLink.API/SkillLink.API.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/SkillLink.API.csproj",
+        "projectUniqueName": "/Users/dulajachintha/Documents/University/SkillLink/SkillLink.API/SkillLink.API.csproj",
         "projectName": "SkillLink.API",
-        "projectPath": "/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/SkillLink.API.csproj",
-        "packagesPath": "/Users/akilaudara/.nuget/packages/",
-        "outputPath": "/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/SkillLink.API/obj/",
+        "projectPath": "/Users/dulajachintha/Documents/University/SkillLink/SkillLink.API/SkillLink.API.csproj",
+        "packagesPath": "/Users/dulajachintha/.nuget/packages/",
+        "outputPath": "/Users/dulajachintha/Documents/University/SkillLink/SkillLink.API/obj/",
         "projectStyle": "PackageReference",
         "configFilePaths": [
-          "/Users/akilaudara/.nuget/NuGet/NuGet.Config"
+          "/Users/dulajachintha/.nuget/NuGet/NuGet.Config"
         ],
         "originalTargetFrameworks": [
           "net9.0"
