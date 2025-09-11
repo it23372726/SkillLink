@@ -125,6 +125,18 @@ const SkillsManagement = () => {
   const [isFiltering, setIsFiltering] = useState(false);
   const [activeExploreSkill, setActiveExploreSkill] = useState("");
 
+  // --- loaders ---
+  const loadSkills = async () => {
+    if (!user?.userId) return;
+    try {
+      setIsLoadingSkills(true);
+      const res = await api.get(`/skills/user/${user.userId}`);
+      setSkills(res.data || []);
+    } finally {
+      setIsLoadingSkills(false);
+    }
+  };
+
   // --- effects ---
   useEffect(() => {
     if (user?.userId) loadSkills();
@@ -143,19 +155,7 @@ const SkillsManagement = () => {
 
   useEffect(() => {
     loadSkills();
-  }, [loadSkills]); // <-- add 'loadSkills' to dependency array
-
-  // --- loaders ---
-  const loadSkills = async () => {
-    if (!user?.userId) return;
-    try {
-      setIsLoadingSkills(true);
-      const res = await api.get(`/skills/user/${user.userId}`);
-      setSkills(res.data || []);
-    } finally {
-      setIsLoadingSkills(false);
-    }
-  };
+  }, [loadSkills]); // <-- fixed: add 'loadSkills' to dependency array
 
   const debouncedSuggest = useMemo(
     () =>
@@ -189,7 +189,6 @@ const SkillsManagement = () => {
       }, 250),
     []
   );
-  
 
   // --- handlers ---
   const onQueryChange = (e) => {
@@ -200,7 +199,6 @@ const SkillsManagement = () => {
     // only trigger suggestion search on input change (debounced)
     debouncedSuggest(sanitized);
   };
-  
 
   const pickSuggestion = (s) => {
     setQuery(s.name);
@@ -214,25 +212,25 @@ const SkillsManagement = () => {
       showToast("info", "Please enter at least 2 characters");
       return;
     }
-  
+
     const dup = skills.some((s) => s.skill?.name?.toLowerCase() === name.toLowerCase());
     if (dup) {
       showToast("info", "Already added this skill");
       return;
     }
-  
+
     try {
       setSkills((prev) => [
         { skillId: `tmp_${Date.now()}`, skill: { name }, level, _optimistic: true },
         ...prev,
       ]);
-  
+
       await api.post("/skills/add", {
         userId: user.userId,
         skillName: name,
         level,
       });
-  
+
       showToast("success", "Skill added");
       setQuery("");
       setLevel("Beginner");
@@ -242,7 +240,6 @@ const SkillsManagement = () => {
       setSkills((prev) => prev.filter((s) => !s._optimistic));
     }
   };
-  
 
   const deleteSkill = async (skillId) => {
     if (!window.confirm("Remove this skill?")) return;
