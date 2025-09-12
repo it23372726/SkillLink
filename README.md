@@ -28,10 +28,50 @@ It allows students to **offer skills**, **request help**, **schedule sessions**,
 ---
 
 ## 📂 Repository Structure
-⁠ bash
 
- ⁠
-<p style="ext-align: center;"><img width="347" height="854" alt="Screenshot 2025-09-12 at 16 18 28" src="https://github.com/user-attachments/assets/a7190802-6059-4484-8aef-3c8809622721" /><p/>
+```
+api/SkillLink.API
+├── bin
+├── Controllers
+├── Data
+├── Models
+├── obj
+├── Properties
+├── Repositories
+├── Services
+├── wwwroot
+├── appsettings.Development.json
+├── appsettings.json
+├── package-lock.json
+├── package.json
+├── Program.cs
+├── SkillLink.API.csproj
+├── SkillLink.API.http
+
+frontend/skilllink-frontend
+├── build
+├── node_modules
+├── public
+├── src
+│   ├── api
+│   ├── components
+│   ├── context
+│   ├── pages
+│   ├── utils
+│   ├── App.css
+│   ├── App.js
+│   ├── index.css
+│   ├── index.js
+│   ├── reportWebVitals.js
+│   └── setupTests.js
+├── .editorconfig
+├── .gitignore
+├── package-lock.json
+├── package.json
+├── README.md
+└── tailwind.config.js
+```
+
 
 ---
 
