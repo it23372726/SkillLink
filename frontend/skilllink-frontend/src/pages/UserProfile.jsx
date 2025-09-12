@@ -3,16 +3,9 @@ import { useNavigate } from "react-router-dom";
 import api from "../api/axios";
 import { toImageUrl } from "../api/base";
 import { useAuth } from "../context/AuthContext";
+import Dock from "../components/Dock";
 
-// ---------- status chip colors ----------
-const chipByStatus = {
-  PENDING: "bg-yellow-200/60 text-yellow-900 dark:bg-yellow-400/20 dark:text-yellow-200",
-  SCHEDULED: "bg-blue-200/60 text-blue-900 dark:bg-blue-400/20 dark:text-blue-200",
-  COMPLETED: "bg-emerald-200/60 text-emerald-900 dark:bg-emerald-400/20 dark:text-emerald-200",
-  CANCELLED: "bg-red-200/60 text-red-900 dark:bg-red-400/20 dark:text-red-200",
-};
-
-// ---------- small UI atoms (no external CSS needed) ----------
+/* ========================== small atoms ========================== */
 const GlassCard = ({ className = "", children }) => (
   <div
     className={
@@ -26,7 +19,6 @@ const GlassCard = ({ className = "", children }) => (
     {children}
   </div>
 );
-
 const GlassBar = ({ className = "", children }) => (
   <div
     className={
@@ -40,9 +32,9 @@ const GlassBar = ({ className = "", children }) => (
     {children}
   </div>
 );
-
 const MacButton = ({ className = "", children, ...props }) => (
   <button
+    {...props}
     className={
       " px-4 py-2 rounded-xl border text-sm transition " +
       " border-black/10 dark:border-white/10 " +
@@ -52,12 +44,10 @@ const MacButton = ({ className = "", children, ...props }) => (
       " text-black/80  dark:text-white/65 active:dark:text-white active:text-black"+
       className
     }
-    {...props}
   >
     {children}
   </button>
 );
-
 const MacPrimary = (props) => (
   <button
     {...props}
@@ -80,7 +70,6 @@ const MacDanger = (props) => (
     }
   />
 );
-
 const MacToggle = ({ checked, onChange, disabled }) => (
   <button
     type="button"
@@ -103,13 +92,11 @@ const MacToggle = ({ checked, onChange, disabled }) => (
     />
   </button>
 );
-
 const Chip = ({ children, className = "" }) => (
   <span className={"px-2.5 py-1 text-xs font-medium rounded-full border border-white/30 dark:border-white/10 " + className}>
     {children}
   </span>
 );
-
 const SectionCard = ({ title, action, children }) => (
   <GlassCard className="p-6">
     <div className="flex items-center justify-between border-b border-black/10 dark:border-white/10 pb-4 mb-4">
@@ -120,10 +107,32 @@ const SectionCard = ({ title, action, children }) => (
   </GlassCard>
 );
 
-// ---------- page ----------
+/* ========================== helpers ========================== */
+const chipByStatus = {
+  PENDING: "bg-yellow-200/60 text-yellow-900 dark:bg-yellow-400/20 dark:text-yellow-200",
+  SCHEDULED: "bg-blue-200/60 text-blue-900 dark:bg-blue-400/20 dark:text-blue-200",
+  COMPLETED: "bg-emerald-200/60 text-emerald-900 dark:bg-emerald-400/20 dark:text-emerald-200",
+  CANCELLED: "bg-red-200/60 text-red-900 dark:bg-red-400/20 dark:text-red-200",
+};
+const levelPill = (level) => {
+  switch (level) {
+    case "Beginner":
+      return "bg-blue-200/60 text-blue-900 dark:bg-blue-400/20 dark:text-blue-200";
+    case "Intermediate":
+      return "bg-emerald-200/60 text-emerald-900 dark:bg-emerald-400/20 dark:text-emerald-200";
+    case "Advanced":
+      return "bg-yellow-200/60 text-yellow-900 dark:bg-yellow-400/20 dark:text-yellow-200";
+    case "Expert":
+      return "bg-purple-200/60 text-purple-900 dark:bg-purple-400/20 dark:text-purple-200";
+    default:
+      return "bg-slate-200/60 text-slate-900 dark:bg-slate-400/20 dark:text-slate-200";
+  }
+};
+
+/* ========================== page ========================== */
 const UserProfile = () => {
   const navigate = useNavigate();
-  const { logout } = useAuth(); // from your AuthContext
+  const { logout } = useAuth();
 
   const [profile, setProfile] = useState(null);
   const [loadingProfile, setLoadingProfile] = useState(true);
@@ -143,6 +152,10 @@ const UserProfile = () => {
   const [loadingTeach, setLoadingTeach] = useState(true);
   const [loadingLearn, setLoadingLearn] = useState(true);
 
+  // skills
+  const [skills, setSkills] = useState([]);
+  const [loadingSkills, setLoadingSkills] = useState(true);
+
   // schedule modal
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState(null);
@@ -160,14 +173,63 @@ const UserProfile = () => {
   const [deactivating, setDeactivating] = useState(false);
 
   // tabs
-  const [tab, setTab] = useState("overview"); // "overview" | "teaching" | "learning"
+  const [tab, setTab] = useState("overview"); // overview | teaching | learning
 
-  // close "more" dropdown on outside clicks
+  // ---- profile photo edit state ----
+  const [photoFile, setPhotoFile] = useState(null);
+  const [photoPreview, setPhotoPreview] = useState("");
+  const prevent = (e) => { e.preventDefault(); e.stopPropagation(); };
+
+  const setProfileFile = (file) => {
+    if (!file) return;
+    if (!file.type?.startsWith("image/")) {
+      setMessage("Please upload an image (JPG/PNG).");
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setMessage("Image is too large. Max 2MB.");
+      return;
+    }
+    setPhotoFile(file);
+  };
+  const onPhotoChange = (e) => {
+    const f = e.target.files?.[0];
+    if (f) setProfileFile(f);
+  };
+  useEffect(() => {
+    if (photoFile) {
+      const url = URL.createObjectURL(photoFile);
+      setPhotoPreview(url);
+      return () => URL.revokeObjectURL(url);
+    }
+    setPhotoPreview("");
+  }, [photoFile]);
+
+  const uploadProfilePhoto = async () => {
+    if (!photoFile) return;
+    const data = new FormData();
+    data.append("profilePicture", photoFile);
+    await api.put("/auth/profile/photo", data, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+  };
+  const removeProfilePhoto = async () => {
+    try {
+      await api.delete("/auth/profile/photo");
+      setPhotoFile(null);
+      setPhotoPreview("");
+      setProfile((p) => ({ ...p, profilePicture: null }));
+      setMessage("Profile photo removed");
+    } catch (err) {
+      console.error("Remove photo error:", err);
+      setMessage("Failed to remove photo");
+    }
+  };
+
+  /* ----------------------- lifecycle ----------------------- */
   useEffect(() => {
     const onClick = (e) => {
-      if (moreRef.current && !moreRef.current.contains(e.target)) {
-        setMoreOpen(false);
-      }
+      if (moreRef.current && !moreRef.current.contains(e.target)) setMoreOpen(false);
     };
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
@@ -180,6 +242,12 @@ const UserProfile = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (profile?.userId) loadSkills();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.userId]);
+
+  /* ----------------------- loaders ----------------------- */
   const loadProfile = async () => {
     try {
       setLoadingProfile(true);
@@ -223,6 +291,20 @@ const UserProfile = () => {
     }
   };
 
+  const loadSkills = async () => {
+    if (!profile?.userId) return;
+    try {
+      setLoadingSkills(true);
+      const res = await api.get(`/skills/user/${profile.userId}`);
+      setSkills(res.data || []);
+    } catch (err) {
+      console.error("Skills load error:", err);
+    } finally {
+      setLoadingSkills(false);
+    }
+  };
+
+  /* ----------------------- actions ----------------------- */
   const onFormChange = (e) => {
     const { name, value } = e.target;
     setForm((p) => ({ ...p, [name]: value }));
@@ -232,14 +314,16 @@ const UserProfile = () => {
     e.preventDefault();
     try {
       setSaving(true);
-      const res = await api.put("/auth/profile", form);
-      if (res.status === 200) {
-        setMessage("Profile updated successfully!");
-        setIsEditing(false);
-        loadProfile();
-      } else {
-        setMessage("Failed to update profile");
-      }
+      // 1) save text fields
+      await api.put("/auth/profile", form);
+      // 2) upload photo if selected
+      if (photoFile) await uploadProfilePhoto();
+
+      setMessage("Profile updated successfully!");
+      setIsEditing(false);
+      setPhotoFile(null);
+      setPhotoPreview("");
+      await loadProfile();
     } catch (err) {
       console.error("Profile save error:", err);
       setMessage("Error updating profile");
@@ -291,7 +375,21 @@ const UserProfile = () => {
     }
   };
 
-  // Deactivate + Logout (self)
+  const deleteSkill = async (skillId) => {
+    if (!profile?.userId || !skillId) return;
+    const confirmed = window.confirm("Remove this skill from your profile?");
+    if (!confirmed) return;
+    try {
+      await api.delete(`/skills/${profile.userId}/${skillId}`);
+      setMessage("Skill removed");
+      setSkills((prev) => prev.filter((s) => s.skillId !== skillId));
+    } catch (err) {
+      console.error("Delete skill error:", err);
+      setMessage("Failed to remove skill");
+      loadSkills();
+    }
+  };
+
   const deactivateAccount = async () => {
     try {
       setDeactivating(true);
@@ -331,10 +429,10 @@ const UserProfile = () => {
 
   const formatDate = (d) => new Date(d).toLocaleString();
 
+  /* ----------------------- renders ----------------------- */
   if (loadingProfile) {
     return (
       <div className="relative min-h-screen font-sans overflow-hidden">
-        {/* Background */}
         <div className="absolute inset-0 -z-10 bg-gradient-to-b from-slate-50 via-white to-slate-100 dark:from-ink-900 dark:via-ink-900 dark:to-ink-800" />
         <div className="absolute -top-20 -right-24 -z-10 w-[520px] h-[520px] rounded-full bg-blue-300/20 blur-3xl dark:bg-blue-400/10" />
         <div className="absolute -bottom-16 -left-16 -z-10 w-[420px] h-[420px] rounded-full bg-indigo-300/20 blur-2xl dark:bg-indigo-400/10" />
@@ -350,11 +448,7 @@ const UserProfile = () => {
       <div className="max-w-4xl mx-auto p-6">
         <SectionCard
           title="Profile"
-          action={
-            <MacPrimary onClick={loadProfile} className="px-3 py-1.5">
-              Retry
-            </MacPrimary>
-          }
+          action={<MacPrimary onClick={loadProfile} className="px-3 py-1.5">Retry</MacPrimary>}
         >
           <p className="text-red-600">Couldn’t load profile.</p>
         </SectionCard>
@@ -366,38 +460,33 @@ const UserProfile = () => {
   const initial = profile.fullName?.[0]?.toUpperCase() || "U";
 
   return (
-    <div className="relative min-h-screen font-sans">
+    <div className="relative min-h-screen font-sans overflow-hidden">
       {/* Background layers */}
       <div className="absolute inset-0 -z-10 bg-gradient-to-b from-slate-50 via-white to-slate-100 dark:from-ink-900 dark:via-ink-900 dark:to-ink-800" />
       <div className="absolute -top-20 -right-24 -z-10 w-[520px] h-[520px] rounded-full bg-blue-300/20 blur-3xl dark:bg-blue-400/10" />
       <div className="absolute -bottom-16 -left-16 -z-10 w-[420px] h-[420px] rounded-full bg-indigo-300/20 blur-2xl dark:bg-indigo-400/10" />
 
-      {/* Top glass bar */}
+      {/* Top bar */}
       <div className="sticky top-0 z-40">
         <GlassBar className="px-6 py-4">
           <div className="max-w-7xl mx-auto flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 shadow" />
-              <div className="text-slate-700 dark:text-slate-200 font-semibold">
-                SkillLink
-              </div>
+              <div className="text-slate-700 dark:text-slate-200 font-semibold">SkillLink</div>
             </div>
-            
-            <div className=" flex mr-24 items-center text-xs text-slate-500 dark:text-slate-400">
+            <div className="flex mr-24 items-center text-xs text-slate-500 dark:text-slate-400">
               <p>Profile</p>
             </div>
-            
           </div>
         </GlassBar>
       </div>
 
       {/* Content */}
       <div className="max-w-6xl mx-auto p-6 space-y-6">
-        {/* Header / Profile Card */}
+        {/* Header */}
         <GlassCard className="p-6">
           <div className="flex items-center justify-between flex-wrap gap-6">
             <div className="flex items-center gap-5">
-              {/* Avatar */}
               <div className="w-24 h-24 rounded-2xl overflow-hidden relative border border-white/40 dark:border-white/10">
                 {avatar ? (
                   <img src={avatar} alt={profile.fullName} className="w-full h-full object-cover" />
@@ -423,9 +512,7 @@ const UserProfile = () => {
                 </div>
                 <p className="text-slate-600 dark:text-slate-300">{profile.email}</p>
                 {profile.location && (
-                  <p className="text-slate-500 dark:text-slate-400 mt-1 text-sm">
-                    📍 {profile.location}
-                  </p>
+                  <p className="text-slate-500 dark:text-slate-400 mt-1 text-sm"><i className="fas fa-map-marker-alt"></i> {profile.location}</p>
                 )}
                 {profile.isActive === false && (
                   <p className="text-red-600 text-sm mt-1">This account is inactive.</p>
@@ -433,52 +520,34 @@ const UserProfile = () => {
               </div>
             </div>
 
-            {/* Actions + Toggle */}
             <div className="flex items-center gap-3">
-              {/* Tutor Mode — not for Admin */}
               {profile.role !== "Admin" && (
                 <div className="flex items-center gap-2">
                   <div className="text-right">
-                    <div className="text-xs font-medium text-slate-700 dark:text-slate-300">
-                      Tutor Mode
-                    </div>
+                    <div className="text-xs font-medium text-slate-700 dark:text-slate-300">Tutor Mode</div>
                     <div className="text-[11px] text-slate-500 dark:text-slate-400">
                       Let others know you can teach
                     </div>
                   </div>
-                  <MacToggle
-                    checked={profile.readyToTeach}
-                    onChange={toggleTutorMode}
-                    disabled={toggling}
-                  />
+                  <MacToggle checked={profile.readyToTeach} onChange={toggleTutorMode} disabled={toggling} />
                 </div>
               )}
 
               <MacPrimary onClick={() => setIsEditing(true)}>Edit Profile</MacPrimary>
 
-              {/* More menu */}
               <div className="relative" ref={moreRef}>
-                <MacButton onClick={() => setMoreOpen((s) => !s)} title="More">
-                  •••
-                </MacButton>
+                <MacButton onClick={() => setMoreOpen((s) => !s)} title="More">•••</MacButton>
                 {moreOpen && (
                   <div className="absolute right-0 mt-2 w-52 rounded-2xl border border-white/40 dark:border-white/10 bg-white/70 dark:bg-ink-900/70 backdrop-blur-xl shadow p-1 z-20">
                     <button
-                      onClick={() => {
-                        setMoreOpen(false);
-                        logout();
-                        navigate("/login");
-                      }}
+                      onClick={() => { setMoreOpen(false); logout(); navigate("/login"); }}
                       className="w-full text-left px-3 py-2 rounded-xl hover:bg-black/5 dark:hover:bg-white/10 dark:text-white/35"
                     >
                       Logout
                     </button>
                     <div className="border-t border-white/40 dark:border-white/10 my-1" />
                     <button
-                      onClick={() => {
-                        setMoreOpen(false);
-                        setConfirmDeactivate(true);
-                      }}
+                      onClick={() => { setMoreOpen(false); setConfirmDeactivate(true); }}
                       className="w-full text-left px-3 py-2 rounded-xl text-red-600 hover:bg-red-50/50 dark:hover:bg-red-400/10"
                     >
                       Deactivate Account
@@ -492,22 +561,11 @@ const UserProfile = () => {
 
         {/* Tabs */}
         <div className="flex gap-2">
-          <MacButton
-            className={tab === "overview" ? "bg-blue-600 text-black" : ""}
-            onClick={() => setTab("overview")}
-          >
-            Overview
-          </MacButton>
-          <MacButton
-            className={tab === "teaching" ? "bg-blue-600 text-black" : ""}
-            onClick={() => setTab("teaching")}
-          >
+          <MacButton className={tab === "overview" ? "bg-blue-600 text-black" : ""} onClick={() => setTab("overview")}>Overview</MacButton>
+          <MacButton className={tab === "teaching" ? "bg-blue-600 text-black" : ""} onClick={() => setTab("teaching")}>
             Teaching <Chip className="ml-2 bg-black/5 dark:bg-white/10">{acceptedRequests.length}</Chip>
           </MacButton>
-          <MacButton
-            className={tab === "learning" ? "bg-blue-600 text-black" : ""}
-            onClick={() => setTab("learning")}
-          >
+          <MacButton className={tab === "learning" ? "bg-blue-600 text-black" : ""} onClick={() => setTab("learning")}>
             Learning <Chip className="ml-2 bg-black/5 dark:bg-white/10">{learningRequests.length}</Chip>
           </MacButton>
         </div>
@@ -522,155 +580,220 @@ const UserProfile = () => {
                 : "ring-1 ring-emerald-300/50")
             }
           >
-            <div className="text-slate-700 dark:text-slate-200">
-              {message}
-            </div>
+            <div className="text-slate-700 dark:text-slate-200">{message}</div>
           </GlassCard>
         )}
 
         {/* Panels */}
         {tab === "overview" && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* About / Edit */}
-            <SectionCard
-              title="About"
-              action={
-                !isEditing && (
-                  <button
-                    onClick={() => setIsEditing(true)}
-                    className="text-sm text-blue-600 hover:text-blue-700"
-                  >
+          <>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* About / Edit */}
+              <SectionCard
+                title="About"
+                action={!isEditing && (
+                  <button onClick={() => setIsEditing(true)} className="text-sm text-blue-600 hover:text-blue-700">
                     Edit
                   </button>
-                )
-              }
-            >
-              {isEditing ? (
-                <form onSubmit={saveProfile} className="space-y-4">
-                  <div>
-                    <label className="text-sm text-slate-700 dark:text-slate-300">Full Name</label>
-                    <input
-                      name="fullName"
-                      className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400/30 border-white/40 dark:border-white/10 bg-ink-500/10 dark:bg-ink-800/60 text-slate-800 dark:text-slate-200"
-                      value={form.fullName}
-                      onChange={onFormChange}
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="text-sm text-slate-700 dark:text-slate-300">Bio</label>
-                    <textarea
-                      name="bio"
-                      rows={3}
-                      className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400/30 border-white/40 dark:border-white/10 bg-ink-500/10 dark:bg-ink-800/60 text-slate-800 dark:text-slate-200"
-                      value={form.bio}
-                      onChange={onFormChange}
-                    />
-                  </div>
-                  <div>
-                    <label className="text-sm text-slate-700 dark:text-slate-300">Location</label>
-                    <input
-                      name="location"
-                      className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400/30 border-white/40 dark:border-white/10 bg-ink-500/10 dark:bg-ink-800/60 text-slate-800 dark:text-slate-200"
-                      value={form.location}
-                      onChange={onFormChange}
-                    />
-                  </div>
-                  <div className="flex gap-2 pt-2">
-                    <MacPrimary type="submit" disabled={saving}>
-                      {saving ? "Saving..." : "Save"}
-                    </MacPrimary>
-                    <MacButton type="button" onClick={() => setIsEditing(false)}>
-                      Cancel
-                    </MacButton>
-                  </div>
-                </form>
-              ) : (
-                <div className="space-y-4">
-                  <div>
-                    <div className="text-sm text-slate-500 dark:text-slate-400">Email</div>
-                    <div className="text-slate-900 dark:text-slate-100">{profile.email}</div>
-                  </div>
-                  <div>
-                    <div className="text-sm text-slate-500 dark:text-slate-400">Member Since</div>
-                    <div className="text-slate-900 dark:text-slate-100">
-                      {new Date(profile.createdAt).toLocaleDateString()}
+                )}
+              >
+                {isEditing ? (
+                  <form onSubmit={saveProfile} className="space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+                      {/* Avatar uploader */}
+                      <div className="sm:col-span-1">
+                        <label className="text-sm text-slate-700 dark:text-slate-300">Profile Photo</label>
+                        <div
+                          className="mt-2 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 py-8 px-1 text-center bg-white/60 dark:bg-ink-800/50"
+                          onDragOver={prevent}
+                          onDrop={(e) => { prevent(e); const f = e.dataTransfer.files?.[0]; if (f) setProfileFile(f); }}
+                        >
+                          <div className=" w-16 h-16 mx-auto rounded-full overflow-hidden shadow bg-white">
+                            {photoPreview ? (
+                              <img src={photoPreview} alt="preview" className="w-full h-full object-cover" />
+                            ) : avatar ? (
+                              <img src={avatar} alt={profile.fullName} className="w-full h-full object-cover" />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center bg-slate-100 dark:bg-ink-800/60">
+                                <span className="text-3xl text-slate-400">👤</span>
+                              </div>
+                            )}
+                          </div>
+
+                          <p className="text-xs text-slate-600 dark:text-slate-400 mt-2">
+                            Drag & drop or{" "}
+                            <label htmlFor="profilePic" className="text-blue-600 hover:underline cursor-pointer">
+                              browse
+                            </label>
+                          </p>
+                          <p className="text-[11px] text-slate-500">Max 2MB • JPG/PNG</p>
+                          <input id="profilePic" type="file" accept="image/*" className="hidden" onChange={onPhotoChange} />
+
+                          {(photoPreview || profile.profilePicture) && (
+                            <button
+                              type="button"
+                              onClick={photoPreview ? () => { setPhotoFile(null); setPhotoPreview(""); } : removeProfilePhoto}
+                              className="mt-3 text-xs text-red-600 hover:text-red-700"
+                            >
+                              {photoPreview ? "Clear selected photo" : "Remove current photo"}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Text fields */}
+                      <div className="sm:col-span-2 space-y-4">
+                        <div>
+                          <label className="text-sm text-slate-700 dark:text-slate-300">Full Name</label>
+                          <input
+                            name="fullName"
+                            className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400/30 border-white/40 dark:border-white/10 bg-ink-500/10 dark:bg-ink-800/60 text-slate-800 dark:text-slate-200"
+                            value={form.fullName}
+                            onChange={onFormChange}
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="text-sm text-slate-700 dark:text-slate-300">Bio</label>
+                          <textarea
+                            name="bio"
+                            rows={3}
+                            className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400/30 border-white/40 dark:border-white/10 bg-ink-500/10 dark:bg-ink-800/60 text-slate-800 dark:text-slate-200"
+                            value={form.bio}
+                            onChange={onFormChange}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-sm text-slate-700 dark:text-slate-300">Location</label>
+                          <input
+                            name="location"
+                            className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400/30 border-white/40 dark:border-white/10 bg-ink-500/10 dark:bg-ink-800/60 text-slate-800 dark:text-slate-200"
+                            value={form.location}
+                            onChange={onFormChange}
+                          />
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                  <div>
-                    <div className="text-sm text-slate-500 dark:text-slate-400">About</div>
-                    <div className="text-slate-900 dark:text-slate-100">
-                      {profile.bio || "No bio yet."}
+
+                    <div className="flex gap-2 pt-2">
+                      <MacPrimary type="submit" disabled={saving}>{saving ? "Saving..." : "Save"}</MacPrimary>
+                      <MacButton
+                        type="button"
+                        onClick={() => { setIsEditing(false); setPhotoFile(null); setPhotoPreview(""); }}
+                      >
+                        Cancel
+                      </MacButton>
                     </div>
-                  </div>
-                  {profile.location && (
+                  </form>
+                ) : (
+                  <div className="space-y-4">
                     <div>
-                      <div className="text-sm text-slate-500 dark:text-slate-400">Location</div>
-                      <div className="text-slate-900 dark:text-slate-100">{profile.location}</div>
+                      <div className="text-sm text-slate-500 dark:text-slate-400">Email</div>
+                      <div className="text-slate-900 dark:text-slate-100">{profile.email}</div>
                     </div>
-                  )}
+                    <div>
+                      <div className="text-sm text-slate-500 dark:text-slate-400">Member Since</div>
+                      <div className="text-slate-900 dark:text-slate-100">
+                        {new Date(profile.createdAt).toLocaleDateString()}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-sm text-slate-500 dark:text-slate-400">About</div>
+                      <div className="text-slate-900 dark:text-slate-100">{profile.bio || "No bio yet."}</div>
+                    </div>
+                    {profile.location && (
+                      <div>
+                        <div className="text-sm text-slate-500 dark:text-slate-400">Location</div>
+                        <div className="text-slate-900 dark:text-slate-100">{profile.location}</div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </SectionCard>
+
+              {/* Stats */}
+              <SectionCard title="Your Stats">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="p-4 rounded-xl border border-black/10 dark:border-white/10 bg-white/100 dark:bg-ink-800/40">
+                    <div className="text-sm text-slate-600 dark:text-slate-400">Teaching (Total)</div>
+                    <div className="text-2xl font-semibold text-slate-900 dark:text-slate-100">{overviewStats.totalTeach}</div>
+                    <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                      {overviewStats.scheduledTeach} scheduled • {overviewStats.completedTeach} completed
+                    </div>
+                  </div>
+                  <div className="p-4 rounded-xl border border-black/10 dark:border-white/10 bg-white/100 dark:bg-ink-800/40">
+                    <div className="text-sm text-slate-600 dark:text-slate-400">Learning (Total)</div>
+                    <div className="text-2xl font-semibold text-slate-900 dark:text-slate-100">{overviewStats.totalLearn}</div>
+                    <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                      {overviewStats.scheduledLearn} scheduled • {overviewStats.completedLearn} completed
+                    </div>
+                  </div>
+                </div>
+              </SectionCard>
+
+              {/* Account */}
+              <SectionCard title="Account & Security">
+                <div className="space-y-4">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <div className="text-sm text-slate-600 dark:text-slate-400">Status</div>
+                      <div className={`text-sm font-medium ${profile.isActive ? "text-emerald-600" : "text-red-600"}`}>
+                        {profile.isActive ? "Active" : "Inactive"}
+                      </div>
+                    </div>
+                    <MacButton onClick={() => logout()}>Logout</MacButton>
+                  </div>
+
+                  <div className="border-t border-black/10 dark:border-white/10 pt-4">
+                    <div className="text-sm text-slate-700 dark:text-slate-300 font-medium">Danger Zone</div>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+                      Deactivate your account to hide your profile and suspend usage. You can ask an admin to reactivate later.
+                    </p>
+                    <MacDanger className="mt-3" onClick={() => setConfirmDeactivate(true)}>
+                      Deactivate Account
+                    </MacDanger>
+                  </div>
+                </div>
+              </SectionCard>
+            </div>
+
+            {/* My Skills */}
+            <SectionCard
+              title="My Skills"
+              action={<MacButton onClick={() => navigate("/skill")} className="text-sm">Manage</MacButton>}
+            >
+              {loadingSkills ? (
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {[...Array(6)].map((_, i) => (
+                    <div key={i} className="border border-slate-200 dark:border-slate-700 rounded-xl p-4 animate-pulse">
+                      <div className="h-4 w-40 bg-slate-200 dark:bg-slate-700 rounded" />
+                      <div className="h-3 w-24 bg-slate-200 dark:bg-slate-700 rounded mt-2" />
+                    </div>
+                  ))}
+                </div>
+              ) : skills.length === 0 ? (
+                <div className="text-slate-600 dark:text-slate-300">
+                  You haven’t added any skills yet. Click <b>Manage</b> to add some.
+                </div>
+              ) : (
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {skills.map((s) => (
+                    <div key={s.skillId} className="border border-slate-200 dark:border-slate-700 rounded-xl p-4 flex items-center justify-between">
+                      <div>
+                        <div className="font-medium text-slate-900 dark:text-slate-100">{s.skill?.name}</div>
+                        <span className={`inline-block mt-1 px-2 py-0.5 text-xs font-semibold rounded-full ${levelPill(s.level)}`}>
+                          {s.level}
+                        </span>
+                      </div>
+                      <button className="text-red-600 hover:text-red-800" onClick={() => deleteSkill(s.skillId)} title="Remove skill">
+                        <i className="fas fa-trash-alt"></i>
+                      </button>
+                    </div>
+                  ))}
                 </div>
               )}
             </SectionCard>
-
-            {/* Overview Stats */}
-            <SectionCard title="Your Stats">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="p-4 rounded-xl border border-black/10 dark:border-white/10 bg-white/100 dark:bg-ink-800/40">
-                  <div className="text-sm text-slate-600 dark:text-slate-400">Teaching (Total)</div>
-                  <div className="text-2xl font-semibold text-slate-900 dark:text-slate-100">
-                    {overviewStats.totalTeach}
-                  </div>
-                  <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                    {overviewStats.scheduledTeach} scheduled • {overviewStats.completedTeach} completed
-                  </div>
-                </div>
-                <div className="p-4 rounded-xl border border-black/10 dark:border-white/10 bg-white/100 dark:bg-ink-800/40">
-                  <div className="text-sm text-slate-600 dark:text-slate-400">Learning (Total)</div>
-                  <div className="text-2xl font-semibold text-slate-900 dark:text-slate-100">
-                    {overviewStats.totalLearn}
-                  </div>
-                  <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                    {overviewStats.scheduledLearn} scheduled • {overviewStats.completedLearn} completed
-                  </div>
-                </div>
-              </div>
-            </SectionCard>
-
-            {/* Account & Security */}
-            <SectionCard title="Account & Security">
-              <div className="space-y-4">
-                <div className="flex justify-between items-center">
-                  <div>
-                    <div className="text-sm text-slate-600 dark:text-slate-400">Status</div>
-                    <div
-                      className={`text-sm font-medium ${
-                        profile.isActive ? "text-emerald-600" : "text-red-600"
-                      }`}
-                    >
-                      {profile.isActive ? "Active" : "Inactive"}
-                    </div>
-                  </div>
-                  <MacButton onClick={() => logout()}>Logout</MacButton>
-                </div>
-
-                <div className="border-t border-black/10 dark:border-white/10 pt-4">
-                  <div className="text-sm text-slate-700 dark:text-slate-300 font-medium">
-                    Danger Zone
-                  </div>
-                  <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-                    Deactivate your account to hide your profile and suspend usage. You can ask an admin to reactivate later.
-                  </p>
-                  <MacDanger
-                    className="mt-3"
-                    onClick={() => setConfirmDeactivate(true)}
-                  >
-                    Deactivate Account
-                  </MacDanger>
-                </div>
-              </div>
-            </SectionCard>
-          </div>
+          </>
         )}
 
         {tab === "teaching" && (
@@ -681,9 +804,7 @@ const UserProfile = () => {
             {loadingTeach ? (
               <div className="text-slate-500 dark:text-slate-400">Loading…</div>
             ) : acceptedRequests.length === 0 ? (
-              <div className="text-slate-600 dark:text-slate-300">
-                You haven’t accepted any requests yet.
-              </div>
+              <div className="text-slate-600 dark:text-slate-300">You haven’t accepted any requests yet.</div>
             ) : (
               <ul className="divide-y divide-white/30 dark:divide-white/10">
                 {acceptedRequests.map((r) => (
@@ -698,8 +819,7 @@ const UserProfile = () => {
                       {r.topic && <p className="text-sm text-slate-600 dark:text-slate-300 mt-0.5">{r.topic}</p>}
                       {r.description && <p className="text-sm text-slate-700 dark:text-slate-200 mt-1">{r.description}</p>}
                       <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">
-                        Requested by: {r.requesterName} ({r.requesterEmail}) • Accepted on{" "}
-                        {new Date(r.acceptedAt).toLocaleDateString()}
+                        Requested by: {r.requesterName} ({r.requesterEmail}) • Accepted on {new Date(r.acceptedAt).toLocaleDateString()}
                       </p>
 
                       {r.status === "SCHEDULED" && (
@@ -709,15 +829,7 @@ const UserProfile = () => {
                           <p className="text-blue-700 dark:text-blue-300">Type: {r.meetingType}</p>
                           {r.meetingType === "ONLINE" && r.meetingLink && (
                             <p className="text-blue-700 dark:text-blue-300 truncate">
-                              Link:{" "}
-                              <a
-                                href={r.meetingLink}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="underline"
-                              >
-                                {r.meetingLink}
-                              </a>
+                              Link: <a href={r.meetingLink} target="_blank" rel="noopener noreferrer" className="underline">{r.meetingLink}</a>
                             </p>
                           )}
                         </div>
@@ -726,9 +838,7 @@ const UserProfile = () => {
 
                     <div className="flex flex-col items-end gap-2">
                       {r.status === "PENDING" && (
-                        <MacPrimary onClick={() => openSchedule(r)} className="text-sm">
-                          Schedule
-                        </MacPrimary>
+                        <MacPrimary onClick={() => openSchedule(r)} className="text-sm">Schedule</MacPrimary>
                       )}
                     </div>
                   </li>
@@ -746,9 +856,7 @@ const UserProfile = () => {
             {loadingLearn ? (
               <div className="text-slate-500 dark:text-slate-400">Loading…</div>
             ) : learningRequests.length === 0 ? (
-              <div className="text-slate-600 dark:text-slate-300">
-                You haven’t made any requests yet.
-              </div>
+              <div className="text-slate-600 dark:text-slate-300">You haven’t made any requests yet.</div>
             ) : (
               <ul className="divide-y divide-white/30 dark:divide-white/10">
                 {learningRequests.map((r) => (
@@ -770,15 +878,7 @@ const UserProfile = () => {
                             <p className="text-blue-700 dark:text-blue-300">Type: {r.meetingType}</p>
                             {r.meetingType === "ONLINE" && r.meetingLink && (
                               <p className="text-blue-700 dark:text-blue-300 truncate">
-                                Link:{" "}
-                                <a
-                                  href={r.meetingLink}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="underline"
-                                >
-                                  {r.meetingLink}
-                                </a>
+                                Link: <a href={r.meetingLink} target="_blank" rel="noopener noreferrer" className="underline">{r.meetingLink}</a>
                               </p>
                             )}
                           </div>
@@ -787,9 +887,7 @@ const UserProfile = () => {
 
                       <div className="flex items-center gap-2">
                         {r.status === "SCHEDULED" && (
-                          <MacPrimary onClick={() => navigate("/VideoSession")} className="text-sm">
-                            Join
-                          </MacPrimary>
+                          <MacPrimary onClick={() => navigate("/VideoSession")} className="text-sm">Join</MacPrimary>
                         )}
                       </div>
                     </div>
@@ -850,9 +948,7 @@ const UserProfile = () => {
               )}
 
               <div className="flex justify-end gap-2 pt-2">
-                <MacButton type="button" onClick={() => setModalOpen(false)}>
-                  Cancel
-                </MacButton>
+                <MacButton type="button" onClick={() => setModalOpen(false)}>Cancel</MacButton>
                 <MacPrimary type="submit" disabled={scheduling}>
                   {scheduling ? "Scheduling..." : "Schedule"}
                 </MacPrimary>
@@ -871,8 +967,7 @@ const UserProfile = () => {
             </div>
             <div className="p-6 space-y-3">
               <p className="text-sm text-slate-700 dark:text-slate-300">
-                Are you sure you want to deactivate your account? Your profile will be inactive and
-                you will be logged out. You can ask an admin to reactivate it later.
+                Are you sure you want to deactivate your account? Your profile will be inactive and you will be logged out. You can ask an admin to reactivate it later.
               </p>
               <div className="flex justify-end gap-2 mt-4">
                 <MacButton onClick={() => setConfirmDeactivate(false)}>Cancel</MacButton>
@@ -885,13 +980,13 @@ const UserProfile = () => {
         </div>
       )}
 
-      {/* Dock Quick Actions */}
-      <div className="fixed bottom-8 left-1/2 -translate-x-1/2 flex gap-3 px-4 py-3 rounded-2xl border border-white/40 dark:border-white/10 bg-white/70 dark:bg-ink-900/70 backdrop-blur-xl shadow z-30">
+      {/* Dock */}
+      <Dock peek={18}>
         <MacButton onClick={() => navigate("/request")}>+ Request</MacButton>
         <MacButton onClick={() => navigate("/skill")}>Skills</MacButton>
         <MacButton onClick={() => navigate("/VideoSession")}>Session</MacButton>
         <MacButton onClick={() => navigate("/dashboard")}>Dashboard</MacButton>
-      </div>
+      </Dock>
     </div>
   );
 };

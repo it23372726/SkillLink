@@ -1,10 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useAuth } from "../context/AuthContext";
 import api from "../api/axios";
 import { toImageUrl } from "../api/base";
 import { useNavigate } from "react-router-dom";
+import Dock from "../components/Dock";
 
-// --- utils ---
+/* -------------------------- utils -------------------------- */
 const debounce = (fn, delay = 300) => {
   let t;
   return (...args) => {
@@ -13,20 +14,7 @@ const debounce = (fn, delay = 300) => {
   };
 };
 
-const GlassCard = ({ className = "", children }) => (
-  <div
-    className={
-      "relative rounded-2xl border shadow " +
-      "backdrop-blur-xl transition-all duration-300 " +
-      "border-black/10 dark:border-white/10 " +
-      " bg-ink-100/50 dark:bg-ink-900/50 " +
-      className
-    }
-  >
-    {children}
-  </div>
-);
-
+/* -------------------------- small UI -------------------------- */
 const GlassBar = ({ className = "", children }) => (
   <div
     className={
@@ -49,8 +37,8 @@ const MacButton = ({ className = "", children, ...props }) => (
       " bg-white/50 hover:bg-black/5 dark:hover:bg-white/10 active:bg-white/80 " +
       " dark:bg-ink-800/60 dark:hover:bg-ink-800/80 " +
       " focus:outline-none focus:ring-1 focus:ring-blue-400/30 dark:focus:text-white/80 focus:text-black" +
-      " text-black/80  dark:text-white/65 active:dark:text-white active:text-black"+
-      className
+      " text-black/80  dark:text-white/65 active:dark:text-white active:text-black" +
+      (className ? " " + className : "")
     }
     {...props}
   >
@@ -58,6 +46,7 @@ const MacButton = ({ className = "", children, ...props }) => (
   </button>
 );
 
+/* -------------------------- page helpers -------------------------- */
 const levels = ["Beginner", "Intermediate", "Advanced", "Expert"];
 
 const levelPill = (level) => {
@@ -99,12 +88,14 @@ const EmptyState = ({ title, subtitle, action }) => (
   </div>
 );
 
+/* -------------------------- component -------------------------- */
 const SkillsManagement = () => {
   const { user } = useAuth();
+  const navigate = useNavigate();
+
+  // list
   const [skills, setSkills] = useState([]);
   const [isLoadingSkills, setIsLoadingSkills] = useState(false);
-
-  const navigate = useNavigate();
 
   // add form
   const [query, setQuery] = useState("");
@@ -125,22 +116,24 @@ const SkillsManagement = () => {
   const [isFiltering, setIsFiltering] = useState(false);
   const [activeExploreSkill, setActiveExploreSkill] = useState("");
 
-  // --- loaders ---
-  const loadSkills = async () => {
-    if (!user?.userId) return;
+  /* ------------ loaders (memoized to satisfy hooks rule) ------------ */
+  const loadSkills = useCallback(async () => {
+    const uid = user?.userId;
+    if (!uid) return;
     try {
       setIsLoadingSkills(true);
-      const res = await api.get(`/skills/user/${user.userId}`);
+      const res = await api.get(`/skills/user/${uid}`);
       setSkills(res.data || []);
+    } catch (e) {
+      console.error("Load skills failed:", e);
     } finally {
       setIsLoadingSkills(false);
     }
-  };
+  }, [user?.userId]);
 
-  // --- effects ---
   useEffect(() => {
     if (user?.userId) loadSkills();
-  }, [user?.userId]);
+  }, [user?.userId, loadSkills]);
 
   useEffect(() => {
     const onClick = (e) => {
@@ -153,10 +146,7 @@ const SkillsManagement = () => {
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
 
-  useEffect(() => {
-    loadSkills();
-  }, [loadSkills]); // <-- fixed: add 'loadSkills' to dependency array
-
+  /* ------------------- suggestions (debounced) ------------------- */
   const debouncedSuggest = useMemo(
     () =>
       debounce(async (raw) => {
@@ -190,13 +180,12 @@ const SkillsManagement = () => {
     []
   );
 
-  // --- handlers ---
+  /* ------------------- handlers ------------------- */
   const onQueryChange = (e) => {
     const v = e.target.value;
-    // collapse multiple spaces to single and keep the raw for user view if you like
+    // collapse multiple spaces to single; prevents "  " → 400
     const sanitized = v.replace(/\s{2,}/g, " ");
     setQuery(sanitized);
-    // only trigger suggestion search on input change (debounced)
     debouncedSuggest(sanitized);
   };
 
@@ -207,6 +196,8 @@ const SkillsManagement = () => {
   };
 
   const addSkill = async () => {
+    if (!user?.userId) return;
+
     const name = query.trim().replace(/\s{2,}/g, " ");
     if (name.length < 2) {
       showToast("info", "Please enter at least 2 characters");
@@ -220,6 +211,7 @@ const SkillsManagement = () => {
     }
 
     try {
+      // optimistic
       setSkills((prev) => [
         { skillId: `tmp_${Date.now()}`, skill: { name }, level, _optimistic: true },
         ...prev,
@@ -235,19 +227,22 @@ const SkillsManagement = () => {
       setQuery("");
       setLevel("Beginner");
       loadSkills();
-    } catch {
+    } catch (e) {
+      console.error(e);
       showToast("error", "Failed to add skill");
       setSkills((prev) => prev.filter((s) => !s._optimistic));
     }
   };
 
   const deleteSkill = async (skillId) => {
+    if (!user?.userId) return;
     if (!window.confirm("Remove this skill?")) return;
     try {
       setSkills((prev) => prev.filter((s) => s.skillId !== skillId));
       await api.delete(`/skills/${user.userId}/${skillId}`);
       showToast("success", "Skill removed");
-    } catch {
+    } catch (e) {
+      console.error(e);
       showToast("error", "Failed to remove skill");
       loadSkills();
     }
@@ -257,8 +252,10 @@ const SkillsManagement = () => {
     try {
       setIsFiltering(true);
       setActiveExploreSkill(name);
-      const res = await api.get(`/skills/filter?skill=${encodeURIComponent(name)}`);
+      const res = await api.get(`/skills/filter`, { params: { skill: name } });
       setFilteredUsers(res.data || []);
+    } catch (e) {
+      console.error("Explore error:", e);
     } finally {
       setIsFiltering(false);
     }
@@ -269,6 +266,7 @@ const SkillsManagement = () => {
     setTimeout(() => setToast({ kind: "info", text: "" }), 2000);
   };
 
+  /* ------------------- UI ------------------- */
   return (
     <div className="relative min-h-screen font-sans overflow-hidden">
       {/* Background layers */}
@@ -282,23 +280,19 @@ const SkillsManagement = () => {
           <div className="max-w-7xl mx-auto flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 shadow" />
-              <div className="text-slate-700 dark:text-slate-200 font-semibold">
-                SkillLink
-              </div>
+              <div className="text-slate-700 dark:text-slate-200 font-semibold">SkillLink</div>
             </div>
-            
-            <div className=" flex mr-24 items-center text-xs text-slate-500 dark:text-slate-400">
+
+            <div className="flex mr-24 items-center text-xs text-slate-500 dark:text-slate-400">
               <p>Skills</p>
             </div>
-            
           </div>
         </GlassBar>
       </div>
+
       {/* Hero */}
       <div className="relative">
-        {/* Gradient Background */}
         <div className="absolute inset-0 -z-10 bg-gradient-to-r from-blue-600 to-indigo-600 dark:from-blue-800 dark:to-indigo-800" />
-        
         <div className="max-w-6xl mx-auto px-6 py-10">
           <h1 className="text-3xl font-bold tracking-tight text-white dark:text-slate-100">
             Skills & Discovery
@@ -380,10 +374,7 @@ const SkillsManagement = () => {
           </div>
 
           <div className="mt-3">
-            <button
-              onClick={addSkill}
-              className="px-4 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700"
-            >
+            <button onClick={addSkill} className="px-4 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700">
               + Add Skill
             </button>
           </div>
@@ -419,9 +410,7 @@ const SkillsManagement = () => {
                 subtitle="Add your first skill to start discovering peers and tutors."
                 action={
                   <button
-                    onClick={() =>
-                      document.querySelector("input[placeholder^='Start typing']")?.focus()
-                    }
+                    onClick={() => document.querySelector("input[placeholder^='Start typing']")?.focus()}
                     className="mt-4 px-4 py-2 rounded-xl border text-black/80 dark:text-white/80 border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
                   >
                     Add a skill
@@ -453,6 +442,7 @@ const SkillsManagement = () => {
                           e.stopPropagation();
                           deleteSkill(s.skillId);
                         }}
+                        title="Remove skill"
                       >
                         <i className="fas fa-trash-alt"></i>
                       </button>
@@ -488,10 +478,7 @@ const SkillsManagement = () => {
                   ))}
                 </div>
               ) : filteredUsers.length === 0 ? (
-                <EmptyState
-                  title="No matches yet"
-                  subtitle="Try another skill or broaden your search."
-                />
+                <EmptyState title="No matches yet" subtitle="Try another skill or broaden your search." />
               ) : (
                 <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {filteredUsers.map((u) => (
@@ -502,11 +489,7 @@ const SkillsManagement = () => {
                       <div className="flex items-center gap-3 mb-3">
                         <div className="w-12 h-12 bg-slate-100 dark:bg-slate-800 rounded-full flex items-center justify-center overflow-hidden">
                           {u.profilePicture ? (
-                            <img
-                              src={toImageUrl(u.profilePicture)}
-                              alt={u.fullName}
-                              className="w-12 h-12 object-cover"
-                            />
+                            <img src={toImageUrl(u.profilePicture)} alt={u.fullName} className="w-12 h-12 object-cover" />
                           ) : (
                             <span className="text-blue-700 font-semibold">
                               {u.fullName?.charAt(0).toUpperCase() || "U"}
@@ -526,9 +509,7 @@ const SkillsManagement = () => {
                         </div>
                       </div>
                       {u.location && (
-                        <div className="text-sm text-slate-600 dark:text-slate-400 flex items-center">
-                          📍 {u.location}
-                        </div>
+                        <div className="text-sm text-slate-600 dark:text-slate-400 flex items-center">📍 {u.location}</div>
                       )}
                     </div>
                   ))}
@@ -538,12 +519,14 @@ const SkillsManagement = () => {
           )}
         </div>
       </div>
-      <div className="fixed bottom-8 left-1/2 -translate-x-1/2 flex gap-3 px-4 py-3 rounded-2xl border border-white/40 dark:border-white/10 bg-white/70 dark:bg-ink-900/70 backdrop-blur-xl shadow z-30">
+
+      {/* Dock */}
+      <Dock peek={18}>
         <MacButton onClick={() => navigate("/request")}>+ Request</MacButton>
         <MacButton onClick={() => navigate("/skill")}>Skills</MacButton>
         <MacButton onClick={() => navigate("/VideoSession")}>Session</MacButton>
         <MacButton onClick={() => navigate("/dashboard")}>Dashboard</MacButton>
-      </div>
+      </Dock>
     </div>
   );
 };
