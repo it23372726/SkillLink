@@ -3,6 +3,7 @@ import { useAuth } from "../context/AuthContext";
 import api from "../api/axios";
 import { toImageUrl } from "../api/base";
 import { useNavigate } from "react-router-dom";
+import Dock from "../components/Dock";
 
 // --- utils ---
 const debounce = (fn, delay = 300) => {
@@ -56,6 +57,68 @@ const MacButton = ({ className = "", children, ...props }) => (
   >
     {children}
   </button>
+);
+
+const MacPrimary = (props) => (
+  <button
+    {...props}
+    className={
+      "px-4 py-2 rounded-xl text-sm transition text-white " +
+      "bg-blue-600 hover:bg-blue-700 active:bg-blue-800 " +
+      "focus:outline-none focus:ring-2 focus:ring-blue-400/40 " +
+      (props.className || "")
+    }
+  />
+);
+const MacDanger = (props) => (
+  <button
+    {...props}
+    className={
+      "px-4 py-2 rounded-xl text-sm transition text-white " +
+      "bg-red-600 hover:bg-red-700 active:bg-red-800 " +
+      "focus:outline-none focus:ring-2 focus:ring-red-400/40 " +
+      (props.className || "")
+    }
+  />
+);
+
+const MacToggle = ({ checked, onChange, disabled }) => (
+  <button
+    type="button"
+    disabled={disabled}
+    onClick={onChange}
+    aria-pressed={checked}
+    className={
+      "relative inline-flex h-7 w-12 items-center rounded-full transition-colors " +
+      (checked
+        ? "bg-gradient-to-b from-emerald-400 to-emerald-500"
+        : "bg-gradient-to-b from-slate-200 to-slate-300 dark:from-ink-700 dark:to-ink-800") +
+      " disabled:opacity-60"
+    }
+  >
+    <span
+      className={
+        "inline-block h-6 w-6 transform rounded-full bg-white shadow transition-transform " +
+        (checked ? "translate-x-5" : "translate-x-1")
+      }
+    />
+  </button>
+);
+
+const Chip = ({ children, className = "" }) => (
+  <span className={"px-2.5 py-1 text-xs font-medium rounded-full border border-white/30 dark:border-white/10 " + className}>
+    {children}
+  </span>
+);
+
+const SectionCard = ({ title, action, children }) => (
+  <GlassCard className="p-6">
+    <div className="flex items-center justify-between border-b border-black/10 dark:border-white/10 pb-4 mb-4">
+      <h3 className="text-lg font-semibold text-ink-800 dark:text-ink-100">{title}</h3>
+      {action}
+    </div>
+    <div>{children}</div>
+  </GlassCard>
 );
 
 const levels = ["Beginner", "Intermediate", "Advanced", "Expert"];
@@ -125,18 +188,6 @@ const SkillsManagement = () => {
   const [isFiltering, setIsFiltering] = useState(false);
   const [activeExploreSkill, setActiveExploreSkill] = useState("");
 
-  // --- loaders ---
-  const loadSkills = async () => {
-    if (!user?.userId) return;
-    try {
-      setIsLoadingSkills(true);
-      const res = await api.get(`/skills/user/${user.userId}`);
-      setSkills(res.data || []);
-    } finally {
-      setIsLoadingSkills(false);
-    }
-  };
-
   // --- effects ---
   useEffect(() => {
     if (user?.userId) loadSkills();
@@ -153,9 +204,17 @@ const SkillsManagement = () => {
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
 
-  useEffect(() => {
-    loadSkills();
-  }, [loadSkills]); // <-- fixed: add 'loadSkills' to dependency array
+  // --- loaders ---
+  const loadSkills = async () => {
+    if (!user?.userId) return;
+    try {
+      setIsLoadingSkills(true);
+      const res = await api.get(`/skills/user/${user.userId}`);
+      setSkills(res.data || []);
+    } finally {
+      setIsLoadingSkills(false);
+    }
+  };
 
   const debouncedSuggest = useMemo(
     () =>
@@ -189,6 +248,7 @@ const SkillsManagement = () => {
       }, 250),
     []
   );
+  
 
   // --- handlers ---
   const onQueryChange = (e) => {
@@ -199,6 +259,7 @@ const SkillsManagement = () => {
     // only trigger suggestion search on input change (debounced)
     debouncedSuggest(sanitized);
   };
+  
 
   const pickSuggestion = (s) => {
     setQuery(s.name);
@@ -212,25 +273,25 @@ const SkillsManagement = () => {
       showToast("info", "Please enter at least 2 characters");
       return;
     }
-
+  
     const dup = skills.some((s) => s.skill?.name?.toLowerCase() === name.toLowerCase());
     if (dup) {
       showToast("info", "Already added this skill");
       return;
     }
-
+  
     try {
       setSkills((prev) => [
         { skillId: `tmp_${Date.now()}`, skill: { name }, level, _optimistic: true },
         ...prev,
       ]);
-
+  
       await api.post("/skills/add", {
         userId: user.userId,
         skillName: name,
         level,
       });
-
+  
       showToast("success", "Skill added");
       setQuery("");
       setLevel("Beginner");
@@ -240,6 +301,7 @@ const SkillsManagement = () => {
       setSkills((prev) => prev.filter((s) => !s._optimistic));
     }
   };
+  
 
   const deleteSkill = async (skillId) => {
     if (!window.confirm("Remove this skill?")) return;
@@ -538,12 +600,12 @@ const SkillsManagement = () => {
           )}
         </div>
       </div>
-      <div className="fixed bottom-8 left-1/2 -translate-x-1/2 flex gap-3 px-4 py-3 rounded-2xl border border-white/40 dark:border-white/10 bg-white/70 dark:bg-ink-900/70 backdrop-blur-xl shadow z-30">
+      <Dock peek={18}>
         <MacButton onClick={() => navigate("/request")}>+ Request</MacButton>
         <MacButton onClick={() => navigate("/skill")}>Skills</MacButton>
         <MacButton onClick={() => navigate("/VideoSession")}>Session</MacButton>
         <MacButton onClick={() => navigate("/dashboard")}>Dashboard</MacButton>
-      </div>
+      </Dock>
     </div>
   );
 };

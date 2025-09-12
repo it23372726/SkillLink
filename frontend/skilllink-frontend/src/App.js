@@ -10,6 +10,7 @@ import SkillsManagement from "./pages/SkillsManagement";
 import RequestsPage from "./pages/RequestPage";
 import RegisterPage from "./pages/RegisterPage";
 import AdminDashboard from "./pages/AdminDashboard"; // create a placeholder
+import { useEffect, useState } from "react";
 import "@fortawesome/fontawesome-free/css/all.min.css";
 
 function App() {

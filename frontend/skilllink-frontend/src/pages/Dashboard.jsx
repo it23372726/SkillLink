@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import api from "../api/axios";
 import { toImageUrl } from "../api/base";
 import { toggleTheme } from "../utils/theme";
+import Dock from "../components/Dock";
 
 // ---------- Small UI atoms (reusing from UserProfile) ----------
 const GlassCard = ({ className = "", children }) => (
@@ -290,12 +291,12 @@ function Dashboard() {
         </GlassCard>
 
         {/* Quick actions dock */}
-        <div className="fixed bottom-8 left-1/2 -translate-x-1/2 flex gap-3 px-4 py-3 rounded-2xl border border-white/40 dark:border-white/10 bg-white/70 dark:bg-ink-900/70 backdrop-blur-xl shadow z-30">
+        <Dock peek={18}>
           <MacButton onClick={() => navigate("/request")}>+ Request</MacButton>
           <MacButton onClick={() => navigate("/skill")}>Skills</MacButton>
           <MacButton onClick={() => navigate("/VideoSession")}>Session</MacButton>
           <MacButton onClick={() => navigate("/profile")}>Profile</MacButton>
-        </div>
+      </Dock>
       </div>
     </div>
   );

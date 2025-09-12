@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import api from "../api/axios";
 import { useNavigate } from "react-router-dom";
+import Dock from "../components/Dock";
 
 /* ========================== Utilities ========================== */
 const debounce = (fn, ms = 400) => {
@@ -71,17 +72,30 @@ const MacButton = ({ children, className = "", ...props }) => (
   <button
     {...props}
     className={
-        " px-4 py-2 rounded-xl border text-sm transition " +
-        " border-black/10 dark:border-white/10 " +
-        " bg-white/50 hover:bg-black/5 dark:hover:bg-white/10 active:bg-white/80 " +
-        " dark:bg-ink-800/60 dark:hover:bg-ink-800/80 " +
-        " focus:outline-none focus:ring-1 focus:ring-blue-400/30 dark:focus:text-white/80 focus:text-black" +
-        " text-black/80  dark:text-white/65 active:dark:text-white active:text-black"+
-        className
+      " px-4 py-2 rounded-xl border text-sm transition " +
+      " border-black/10 dark:border-white/10 " +
+      " bg-white/50 hover:bg-black/5 dark:hover:bg-white/10 active:bg-white/80 " +
+      " dark:bg-ink-800/60 dark:hover:bg-ink-800/80 " +
+      " focus:outline-none focus:ring-1 focus:ring-blue-400/30 dark:focus:text-white/80 focus:text-black" +
+      " text-black/80  dark:text-white/65 active:dark:text-white active:text-black" +
+      " " +
+      className
     }
   >
     {children}
   </button>
+);
+
+const MacPrimary = (props) => (
+  <button
+    {...props}
+    className={
+      "px-4 py-2 rounded-xl text-sm font-medium text-white " +
+      "bg-blue-600 hover:bg-blue-700 active:bg-blue-800 " +
+      "focus:outline-none focus:ring-2 focus:ring-blue-400/40 " +
+      (props.className || "")
+    }
+  />
 );
 
 const MacDanger = (props) => (
@@ -89,7 +103,6 @@ const MacDanger = (props) => (
     {...props}
     className={
       "px-4 py-2 rounded-xl text-sm font-medium text-white " +
-    //   "bg-red-600 hover:bg-red-700 active:bg-red-800 " +
       "focus:outline-none focus:ring-2 focus:ring-red-400/40 " +
       (props.className || "")
     }
@@ -98,11 +111,14 @@ const MacDanger = (props) => (
 
 const Badge = ({ children, color = "gray" }) => {
   const map = {
-    gray: "bg-slate-200/60 text-slate-900 dark:bg-slate-400/20 dark:text-slate-200",
+    gray:
+      "bg-slate-200/60 text-slate-900 dark:bg-slate-400/20 dark:text-slate-200",
     green:
       "bg-emerald-200/60 text-emerald-900 dark:bg-emerald-400/20 dark:text-emerald-200",
-    red: "bg-red-200/60 text-red-900 dark:bg-red-400/20 dark:text-red-200",
-    blue: "bg-blue-200/60 text-blue-900 dark:bg-blue-400/20 dark:text-blue-200",
+    red:
+      "bg-red-200/60 text-red-900 dark:bg-red-400/20 dark:text-red-200",
+    blue:
+      "bg-blue-200/60 text-blue-900 dark:bg-blue-400/20 dark:text-blue-200",
     purple:
       "bg-purple-200/60 text-purple-900 dark:bg-purple-400/20 dark:text-purple-200",
     amber:
@@ -238,6 +254,9 @@ const AdminDashboard = () => {
   const [bulkOpen, setBulkOpen] = useState(false);
   const bulkRef = useRef(null);
 
+  // delete loading state
+  const [deletingId, setDeletingId] = useState(null);
+
   // persist dark mode on refresh
   useEffect(() => {
     const t = localStorage.theme;
@@ -271,7 +290,7 @@ const AdminDashboard = () => {
     // eslint-disable-next-line
   }, []);
 
-  const debouncedLoad = useMemo(() => debounce(load, 500), [load]);
+  const debouncedLoad = useMemo(() => debounce(load, 500), []);
 
   // close bulk dropdown on outside click / ESC
   useEffect(() => {
@@ -420,6 +439,45 @@ const AdminDashboard = () => {
     </th>
   );
 
+  /* ========= Proper delete with toast + reload ========= */
+  const deleteUser = async (userId) => {
+    if (!userId || deletingId) return;
+
+    const confirmed = window.confirm(
+      "⚠️ Are you sure you want to permanently delete this user?\n\nThis action cannot be undone."
+    );
+    if (!confirmed) return;
+
+    try {
+      setDeletingId(userId);
+      await api.delete(`/auth/users/${userId}`);
+
+      showToast("success", "User deleted successfully");
+      setActiveUser(null); // close drawer if open
+      await load(); // reload user list
+
+    } catch (err) {
+      console.error("Delete failed:", err);
+
+      if (err.response?.status === 404) {
+        showToast("error", "User not found");
+      } else if (err.response?.status === 403) {
+        showToast("error", "You are not authorized to delete users");
+      } else if (err.response?.status === 409) {
+        showToast("error", err.response?.data?.message || "Cannot delete this user");
+      } else if (err.response?.status === 400) {
+        showToast(
+          "error",
+          "Bad request: " + (err.response?.data?.message || "Invalid request.")
+        );
+      } else {
+        showToast("error", "Unexpected error. Please try again later.");
+      }
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   return (
     <div className="relative min-h-screen font-sans overflow-hidden">
       {/* Gradient background layers */}
@@ -432,9 +490,7 @@ const AdminDashboard = () => {
         <div className="max-w-7xl mx-auto flex justify-between items-center">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 shadow" />
-            <div className="text-slate-800 dark:text-slate-200 font-semibold">
-                SkillLink
-            </div>
+            <div className="text-slate-800 dark:text-slate-200 font-semibold">SkillLink</div>
           </div>
           <div className="flex gap-12 items-center text-xs text-slate-500 dark:text-slate-400">
             <p>Admin Dashboard</p>
@@ -445,7 +501,7 @@ const AdminDashboard = () => {
                 localStorage.theme = el.classList.contains("dark") ? "dark" : "light";
               }}
             >
-              <i className="fas fa-moon"></i> {/*  darkmode icon */}
+              <i className="fas fa-moon"></i>
             </MacButton>
           </div>
         </div>
@@ -556,7 +612,7 @@ const AdminDashboard = () => {
                 <GlassCard
                   role="menu"
                   className="absolute right-0 top-12 z-[70] min-w-[220px] bg-[rgba(255,255,255,0.9)] dark:bg-[rgb(15_23_42/var(--tw-bg-opacity,1))] overflow-hidden"
-                  >
+                >
                   <button
                     onClick={() => selectedIds.length && setActive(selectedIds, true)}
                     className="block w-full text-left px-4 py-2 text-black/80 dark:text-white/65 hover:bg-black/10 dark:hover:bg-ink-800/60"
@@ -724,8 +780,10 @@ const AdminDashboard = () => {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
-                        <MacDanger onClick={() => setActive([u.userId], !u.isActive)}
-                        className={u.isActive ? "bg-red-600 hover:bg-red-700" : "bg-green-600 hover:bg-green-700"}>
+                        <MacDanger
+                          onClick={() => setActive([u.userId], !u.isActive)}
+                          className={u.isActive ? "bg-red-600 hover:bg-red-700" : "bg-green-600 hover:bg-green-700"}
+                        >
                           {u.isActive ? "Deactivate" : "Activate"}
                         </MacDanger>
                         <MacButton onClick={() => setActiveUser(u)}>View</MacButton>
@@ -838,7 +896,14 @@ const AdminDashboard = () => {
               </div>
 
               <div className="mt-6 grid grid-cols-2 gap-2">
-                <MacDanger onClick={() => setActive([activeUser.userId], !activeUser.isActive)} className={activeUser.isActive ? "bg-red-600 hover:bg-red-700" : "bg-green-600 hover:bg-green-700"}>
+                <MacDanger
+                  onClick={() => setActive([activeUser.userId], !activeUser.isActive)}
+                  className={
+                    activeUser.isActive
+                      ? "bg-red-600 hover:bg-red-700"
+                      : "bg-green-600 hover:bg-green-700"
+                  }
+                >
                   {activeUser.isActive ? "Deactivate" : "Activate"}
                 </MacDanger>
                 <select
@@ -851,18 +916,34 @@ const AdminDashboard = () => {
                   <option value="Admin">Admin</option>
                 </select>
               </div>
+
+              <button
+                disabled={!!deletingId}
+                onClick={() => deleteUser(activeUser.userId)}
+                className={
+                  "flex justify-center items-center mt-3 w-full px-4 py-2 " +
+                  "rounded-xl border border-red-600 text-red-700 " +
+                  "hover:bg-red-600/10 active:bg-red-600/20 " +
+                  "dark:border-red-500 dark:text-red-400 " +
+                  "dark:hover:bg-red-500/10 dark:active:bg-red-500/20 " +
+                  "transition text-sm font-medium " +
+                  (deletingId ? "opacity-60 cursor-not-allowed" : "")
+                }
+              >
+                {deletingId ? "Deleting…" : "Delete Permanently"}
+              </button>
             </GlassCard>
           </div>
         </div>
       )}
 
       {/* Dock Quick Actions */}
-      <div className="fixed bottom-8 left-1/2 -translate-x-1/2 flex gap-3 px-4 py-3 rounded-2xl border border-white/40 dark:border-white/10 bg-white/70 dark:bg-ink-900/70 backdrop-blur-xl shadow z-30">
+      <Dock peek={18}>
         <MacButton onClick={() => navigate("/request")}>+ Request</MacButton>
         <MacButton onClick={() => navigate("/skill")}>Skills</MacButton>
         <MacButton onClick={() => navigate("/VideoSession")}>Session</MacButton>
         <MacButton onClick={() => navigate("/profile")}>Profile</MacButton>
-      </div>
+      </Dock>
     </div>
   );
 };
