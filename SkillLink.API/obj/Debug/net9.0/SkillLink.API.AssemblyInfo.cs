@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("SkillLink.API")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+8f98227c0e897689d7f493fc367225da8aa61e68")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+f93a1ba96cfa3cb27599fc73ebfc5c614077a6ff")]
 [assembly: System.Reflection.AssemblyProductAttribute("SkillLink.API")]
 [assembly: System.Reflection.AssemblyTitleAttribute("SkillLink.API")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
