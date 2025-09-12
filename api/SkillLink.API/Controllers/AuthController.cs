@@ -62,6 +62,43 @@ namespace SkillLink.API.Controllers
             return Ok(new { message = "Profile updated successfully" });
         }
 
+              [Authorize]
+        [HttpPut("profile/photo")]
+        public IActionResult UpdateProfilePhoto(IFormFile profilePicture, [FromServices] IWebHostEnvironment env)
+        {
+            var me = _authService.CurrentUser(User);
+            if (me == null) return Unauthorized();
+
+            if (profilePicture == null || profilePicture.Length == 0)
+                return BadRequest(new { message = "No file uploaded" });
+
+            var uploads = Path.Combine(env.WebRootPath ?? "wwwroot", "uploads", "profiles");
+            Directory.CreateDirectory(uploads);
+            var ext = Path.GetExtension(profilePicture.FileName);
+            var fileName = $"{Guid.NewGuid()}{ext}";
+            var fullPath = Path.Combine(uploads, fileName);
+
+            using (var fs = new FileStream(fullPath, FileMode.Create))
+                profilePicture.CopyTo(fs);
+
+            // Save relative URL (served via UseStaticFiles)
+            var rel = $"/uploads/profiles/{fileName}";
+            _authService.UpdateProfilePicture(me.UserId, rel);
+
+            return Ok(new { profilePicture = rel });
+        }
+
+        [Authorize]
+        [HttpDelete("profile/photo")]
+        public IActionResult DeleteProfilePhoto()
+        {
+            var me = _authService.CurrentUser(User);
+            if (me == null) return Unauthorized();
+
+            _authService.UpdateProfilePicture(me.UserId, null);
+            return Ok(new { message = "Photo removed" });
+        }
+
         [Authorize]
         [HttpGet("me")]
         public IActionResult GetCurrentUser()
@@ -198,20 +235,46 @@ namespace SkillLink.API.Controllers
             });
         }
 
-         [Authorize]
-         [HttpDelete("delete")]
-         public IActionResult DeleteUser(int id){
+         [Authorize(Roles = "Admin")]
+        [HttpDelete("users/{id:int}")]
+        public IActionResult DeleteUser(int id)
+        {
+            if (id <= 0)
+                return BadRequest(new { message = "Invalid user id." });
+
+            var current = _authService.CurrentUser(User);
+            if (current == null)
+                return Unauthorized(new { message = "Not authenticated." });
+
+            // Optional guard: prevent deleting yourself
+            if (current.UserId == id)
+                return BadRequest(new { message = "You cannot delete your own account." });
+
             try
             {
                 _authService.DeleteUserFromDB(id);
-                return Ok( new {message = "User deleted!"});
+                return NoContent(); // or Ok(new { message = "User deleted!" });
+            }
+            catch (KeyNotFoundException)
+            {
+                return NotFound(new { message = "User not found." });
             }
             catch (InvalidOperationException ex)
             {
-                return BadRequest(new { message = ex.Message });
+                // e.g., last admin guard
+                return Conflict(new { message = ex.Message });
             }
+            catch (MySql.Data.MySqlClient.MySqlException ex) when (ex.Number == 1451)
+            {
+                // Foreign key constraint error (child rows exist)
+                return Conflict(new { message = "Cannot delete this user due to related data. Remove or reassign their data first." });
+            }
+            catch (Exception)
+            {
+                return StatusCode(500, new { message = "Unexpected error occurred." });
+            }
+        }
 
-         }
 
     }
 }

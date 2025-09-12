@@ -362,13 +362,57 @@ namespace SkillLink.API.Services
         }
 
         // --- Delete User ---
-        public void DeleteUserFromDB(int id){
+        public void DeleteUserFromDB(int id)
+        {
             using var conn = _dbHelper.GetConnection();
             conn.Open();
 
-            using var cmd = new MySqlCommand("DELETE FROM Users WHERE UserId = @id" ,conn);
-            cmd.Parameters.AddWithValue("@id" , id);
-            cmd.ExecuteNonQuery();
+            using var tx = conn.BeginTransaction();
+
+            // 1) Ensure user exists & lock the row
+            string? role = null;
+            using (var get = new MySqlCommand("SELECT Role FROM Users WHERE UserId=@id FOR UPDATE", conn, tx))
+            {
+                get.Parameters.AddWithValue("@id", id);
+                using var r = get.ExecuteReader();
+                if (!r.Read())
+                    throw new KeyNotFoundException("User not found.");
+
+                role = r.GetString("Role");
+            }
+
+            // 2) Optional: prevent deleting the last admin
+            if (string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase))
+            {
+                using var c = new MySqlCommand("SELECT COUNT(*) FROM Users WHERE Role='Admin'", conn, tx);
+                var adminCount = Convert.ToInt32(c.ExecuteScalar());
+                if (adminCount <= 1)
+                    throw new InvalidOperationException("Cannot delete the last admin.");
+            }
+
+            // 4) Delete the user
+            using (var cmd = new MySqlCommand("DELETE FROM Users WHERE UserId = @id", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@id", id);
+                var affected = cmd.ExecuteNonQuery();
+                if (affected == 0)
+                    throw new KeyNotFoundException("User not found.");
+            }
+
+            tx.Commit();
         }
+        
+        public bool UpdateProfilePicture(int userId, string? path)
+        {
+            using var conn = _dbHelper.GetConnection();
+            conn.Open();
+            using var cmd = new MySqlCommand(
+                "UPDATE Users SET ProfilePicture=@p WHERE UserId=@id", conn);
+            cmd.Parameters.AddWithValue("@p", (object?)path ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@id", userId);
+            return cmd.ExecuteNonQuery() > 0;
+        }
+
+
     }
 }
