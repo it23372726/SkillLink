@@ -1,55 +1,71 @@
-CREATE TABLE Users (
-    UserID INT AUTO_INCREMENT PRIMARY KEY,
-    Email VARCHAR(100) NOT NULL UNIQUE,
-    PasswordHash VARCHAR(255) NOT NULL,
-    FullName VARCHAR(100) NOT NULL,
-    Role ENUM('learner','tutor','admin') NOT NULL,
-    CreatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE Requests (
+    RequestId INT AUTO_INCREMENT PRIMARY KEY,
+    LearnerId INT NOT NULL,
+    SkillName VARCHAR(100) NOT NULL,
+    Topic VARCHAR(100) NOT NULL,
+    Status ENUM('OPEN','MATCHED','COMPLETED','CANCELLED') DEFAULT 'OPEN',
+    CreatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    Description VARCHAR(255)
 );
 
+
+CREATE TABLE Sessions (
+    SessionId INT AUTO_INCREMENT PRIMARY KEY,
+    RequestId INT NOT NULL,
+    TutorId INT NOT NULL,
+    ScheduledAt DATETIME,
+    Status ENUM('PENDING','CONFIRMED','COMPLETED','CANCELLED') DEFAULT 'PENDING',
+    CreatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (RequestId) REFERENCES Requests(RequestId)
+);
+CREATE TABLE Users (
+    UserId INT AUTO_INCREMENT PRIMARY KEY,
+    FullName VARCHAR(100) NOT NULL,
+    Email VARCHAR(100) UNIQUE NOT NULL,
+    PasswordHash VARCHAR(255) NOT NULL,
+    Role ENUM('Learner', 'Tutor', 'Admin') DEFAULT 'Learner',
+    CreatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+ALTER TABLE Users
+  ADD COLUMN IsActive TINYINT(1) NOT NULL DEFAULT 1;
+ALTER TABLE Users 
+ADD COLUMN Bio TEXT NULL,
+ADD COLUMN Location VARCHAR(100) NULL,
+ADD COLUMN ProfilePicture VARCHAR(255) NULL;
+ALTER TABLE Users ADD COLUMN ReadyToTeach TINYINT(1) NOT NULL DEFAULT 0;
+ALTER TABLE Users
+  ADD COLUMN EmailVerified TINYINT(1) NOT NULL DEFAULT 0,
+  ADD COLUMN EmailVerificationToken VARCHAR(128) NULL,
+  ADD COLUMN EmailVerificationExpires DATETIME NULL;
+
+
+
 CREATE TABLE Skills (
-    SkillID INT AUTO_INCREMENT PRIMARY KEY,
-    SkillName VARCHAR(100) NOT NULL UNIQUE,
-    Description TEXT
+    SkillId INT AUTO_INCREMENT PRIMARY KEY,
+    Name VARCHAR(100) UNIQUE NOT NULL,
+    IsPredefined BOOLEAN DEFAULT FALSE
 );
 
 CREATE TABLE UserSkills (
-    UserID INT NOT NULL,
-    SkillID INT NOT NULL,
-    Level ENUM('beginner','intermediate','advanced') NOT NULL,
-    PRIMARY KEY(UserID, SkillID),
-    FOREIGN KEY(UserID) REFERENCES Users(UserID),
-    FOREIGN KEY(SkillID) REFERENCES Skills(SkillID)
+    UserSkillId INT AUTO_INCREMENT PRIMARY KEY,
+    UserId INT NOT NULL,
+    SkillId INT NOT NULL,
+    Level ENUM('Beginner', 'Intermediate', 'Advanced', 'Expert') NOT NULL,
+    FOREIGN KEY (UserId) REFERENCES Users(UserId),
+    FOREIGN KEY (SkillId) REFERENCES Skills(SkillId),
+    UNIQUE(UserId, SkillId) -- prevent duplicate skills per user
 );
 
-CREATE TABLE Requests (
-    RequestID INT AUTO_INCREMENT PRIMARY KEY,
-    LearnerID INT NOT NULL,
-    SkillID INT NOT NULL,
-    Status ENUM('pending','accepted','completed','cancelled') DEFAULT 'pending',
-    RequestedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(LearnerID) REFERENCES Users(UserID),
-    FOREIGN KEY(SkillID) REFERENCES Skills(SkillID)
+CREATE TABLE AcceptedRequests (
+    AcceptedRequestId INT AUTO_INCREMENT PRIMARY KEY,
+    RequestId INT NOT NULL,
+    AcceptorId INT NOT NULL,
+    AcceptedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+    Status VARCHAR(20) DEFAULT 'PENDING',
+    FOREIGN KEY (RequestId) REFERENCES Requests(RequestId) ON DELETE CASCADE,
+    FOREIGN KEY (AcceptorId) REFERENCES Users(UserId) ON DELETE CASCADE
 );
-
-CREATE TABLE Sessions (
-    SessionID INT AUTO_INCREMENT PRIMARY KEY,
-    RequestID INT NOT NULL,
-    TutorID INT NOT NULL,
-    ScheduledAt DATETIME NOT NULL,
-    DurationMinutes INT,
-    Status ENUM('scheduled','completed','cancelled') DEFAULT 'scheduled',
-    FOREIGN KEY(RequestID) REFERENCES Requests(RequestID),
-    FOREIGN KEY(TutorID) REFERENCES Users(UserID)
-);
-
-CREATE TABLE Feedback (
-    FeedbackID INT AUTO_INCREMENT PRIMARY KEY,
-    SessionID INT NOT NULL,
-    ReviewerID INT NOT NULL,
-    Rating INT CHECK(Rating BETWEEN 1 AND 5),
-    Comments TEXT,
-    CreatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(SessionID) REFERENCES Sessions(SessionID),
-    FOREIGN KEY(ReviewerID) REFERENCES Users(UserID)
-);
+ALTER TABLE AcceptedRequests 
+ADD COLUMN ScheduleDate DATETIME NULL,
+ADD COLUMN MeetingType VARCHAR(20) NULL,
+ADD COLUMN MeetingLink VARCHAR(500) NULL;
