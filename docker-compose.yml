@@ -1,0 +1,86 @@
+services:
+  db:
+    image: mysql:8.0
+    container_name: skilllink-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: skilllink
+      MYSQL_USER: skilluser
+      MYSQL_PASSWORD: skillpass
+    ports:
+      - "3307:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+      # Use a dedicated schema file for prod DB
+      - ./db/init/1_schema.sql:/docker-entrypoint-initdb.d/1_schema.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./SkillLink.API
+      dockerfile: Dockerfile
+    container_name: skilllink-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Production"
+      ASPNETCORE_URLS: "http://+:8080"
+      ASPNETCORE_HTTPS_PORT: "8443"
+      CORS__Origins: "http://localhost:3000;http://127.0.0.1:3000"
+
+      # ---- Connection string for DbHelper ----
+      ConnectionStrings__DefaultConnection: "Server=db;Port=3306;Database=skilllink;Uid=skilluser;Pwd=skillpass;Allow User Variables=True;SslMode=None;AllowPublicKeyRetrieval=True"
+
+      # ---- JWT / App Settings ----
+      Jwt__Key: "dev-secret-key-change"
+      Jwt__Issuer: "skilllink"
+      Jwt__Audience: "skilllink-web"
+      Jwt__ExpireMinutes: "120"
+      Api__BaseUrl: "http://localhost:5159"
+
+      # ---- SMTP placeholders (email will fail safely in tests) ----
+      Smtp__Host: "smtp.example.com"
+      Smtp__Port: "587"
+      Smtp__User: "user"
+      Smtp__Pass: "pass"
+      Smtp__From: "noreply@skilllink.local"
+      Smtp__UseSSL: "false"
+
+    ports:
+      - "5159:8080"
+    volumes:
+      - ./SkillLink.API/wwwroot:/app/wwwroot
+      - dpkeys:/root/.aspnet/DataProtection-Keys
+
+  db_test:
+    image: mysql:8.0
+    container_name: skilllink-db-test
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: skilllink_test
+      MYSQL_USER: testuser
+      MYSQL_PASSWORD: testpass
+    ports:
+      - "3308:3306"
+    volumes:
+      - db_test_data:/var/lib/mysql
+      # Use a dedicated schema file for test DB
+      - ./db_test/init/1_schema.sql:/docker-entrypoint-initdb.d/1_schema.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  db_data:
+  db_test_data:
+  dpkeys:
