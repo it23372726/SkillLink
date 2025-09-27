@@ -22,7 +22,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\api\SkillLink.API\SkillLink.API.csproj" />
+    <ProjectReference Include="..\..\SkillLink.API\SkillLink.API.csproj" />
   </ItemGroup>
 
 </Project>

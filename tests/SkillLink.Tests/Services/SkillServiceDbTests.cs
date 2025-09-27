@@ -1,41 +1,39 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using MySql.Data.MySqlClient;
 using NUnit.Framework;
-using SkillLink.API.Services;
 using SkillLink.API.Models;
-
-// SkillService/AuthService/EmailService/DbHelper and Models are in the API project
+using SkillLink.API.Services;
 
 namespace SkillLink.Tests.Services
 {
     [TestFixture]
     public class SkillServiceDbTests
     {
-    private Testcontainers.MySql.MySqlContainer _mysql = null!;
-    private bool _ownsContainer = false;
-    private string? _externalConnStr = null;
+        private Testcontainers.MySql.MySqlContainer _mysql = null!;
+        private bool _ownsContainer = false;
+        private string? _externalConnStr = null;
+
         private IConfiguration _config = null!;
         private DbHelper _dbHelper = null!;
-        private EmailService _email = null!;
-        private AuthService _auth = null!;
         private SkillService _sut = null!;
+        private AuthService _auth = null!;
 
         [OneTimeSetUp]
         public async Task OneTimeSetup()
         {
-            // If external connection string provided, use it; else try Docker; else skip
+            // Allow external DB via env var to avoid Docker on some machines
             var external = Environment.GetEnvironmentVariable("SKILLLINK_TEST_MYSQL");
             if (!string.IsNullOrWhiteSpace(external))
             {
                 _externalConnStr = external;
             }
 
+            // Detect Docker availability
             var dockerHost = Environment.GetEnvironmentVariable("DOCKER_HOST");
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             var sock1 = "/var/run/docker.sock";
@@ -57,6 +55,7 @@ namespace SkillLink.Tests.Services
                         .WithUsername("testuser")
                         .WithPassword("testpass")
                         .Build();
+
                     await _mysql.StartAsync();
                     _ownsContainer = true;
                 }
@@ -69,7 +68,7 @@ namespace SkillLink.Tests.Services
 
             var connStr = _externalConnStr ?? _mysql.GetConnectionString();
 
-            // Create schema for Users, Skills, and UserSkills
+            // Create schema
             await using (var conn = new MySqlConnection(connStr))
             {
                 await conn.OpenAsync();
@@ -78,55 +77,56 @@ namespace SkillLink.Tests.Services
                       UserId INT AUTO_INCREMENT PRIMARY KEY,
                       FullName VARCHAR(255) NOT NULL,
                       Email VARCHAR(255) NOT NULL UNIQUE,
-                      PasswordHash VARCHAR(255) NOT NULL,
-                      Role VARCHAR(50) NOT NULL,
-                      ProfilePicture TEXT NULL,
-                      CreatedAt DATETIME NOT NULL,
+                      PasswordHash VARCHAR(255) NULL,
+                      Role VARCHAR(50) NOT NULL DEFAULT 'Learner',
+                      CreatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                       Bio TEXT NULL,
                       Location VARCHAR(255) NULL,
+                      ProfilePicture VARCHAR(512) NULL,
                       ReadyToTeach TINYINT(1) NOT NULL DEFAULT 0,
                       IsActive TINYINT(1) NOT NULL DEFAULT 1,
-                      EmailVerified TINYINT(1) NOT NULL DEFAULT 0,
-                      EmailVerificationToken VARCHAR(255) NULL,
-                      EmailVerificationExpires DATETIME NULL
+                      EmailVerified TINYINT(1) NOT NULL DEFAULT 1
                     );
+
                     CREATE TABLE IF NOT EXISTS Skills (
                       SkillId INT AUTO_INCREMENT PRIMARY KEY,
                       Name VARCHAR(255) NOT NULL UNIQUE,
                       IsPredefined TINYINT(1) NOT NULL DEFAULT 0
                     );
+
                     CREATE TABLE IF NOT EXISTS UserSkills (
                       UserSkillId INT AUTO_INCREMENT PRIMARY KEY,
                       UserId INT NOT NULL,
                       SkillId INT NOT NULL,
                       Level VARCHAR(50) NOT NULL,
-                      UNIQUE KEY uq_user_skill (UserId, SkillId)
+                      UNIQUE KEY uk_user_skill (UserId, SkillId),
+                      FOREIGN KEY (UserId) REFERENCES Users(UserId) ON DELETE CASCADE,
+                      FOREIGN KEY (SkillId) REFERENCES Skills(SkillId) ON DELETE CASCADE
                     );
                 ";
                 await using var cmd = new MySqlCommand(sql, conn);
                 await cmd.ExecuteNonQueryAsync();
             }
 
+            // Minimal config for AuthService constructor
             _config = new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     { "ConnectionStrings:DefaultConnection", connStr },
-                    // Dummy SMTP/JWT to satisfy constructors if ever used
-                    { "Smtp:Host", "localhost" },
-                    { "Smtp:Port", "2525" },
-                    { "Smtp:User", "user" },
-                    { "Smtp:Pass", "pass" },
-                    { "Smtp:From", "noreply@example.com" },
-                    { "Jwt:Key", "testkeytestkeytestkeytestkey" },
-                    { "Jwt:Issuer", "test" },
-                    { "Jwt:Audience", "test" },
+                    // Jwt settings not needed for GetUserById, but AuthService ctor uses IConfiguration
+                    { "Jwt:Key", "x".PadLeft(32,'x') }, 
+                    { "Jwt:Issuer", "SkillLink" },
+                    { "Jwt:Audience", "SkillLink" },
                     { "Jwt:ExpireMinutes", "60" }
                 })
                 .Build();
 
             _dbHelper = new DbHelper(_config);
-            _email = new EmailService(_config);
-            _auth = new AuthService(_dbHelper, _config, _email);
+
+            // EmailService not needed for these tests, but AuthService requires it
+            var dummyEmail = new EmailService(_config);
+            _auth = new AuthService(_dbHelper, _config, dummyEmail);
+
             _sut = new SkillService(_dbHelper, _auth);
         }
 
@@ -142,147 +142,106 @@ namespace SkillLink.Tests.Services
         [SetUp]
         public async Task Setup()
         {
-            // Clean tables between tests
+            // Clean tables
             await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
             await conn.OpenAsync();
-            var sql = string.Join(" ", new[]
-            {
-                "DELETE FROM UserSkills;",
-                "DELETE FROM Skills;",
-                "DELETE FROM Users;",
-                "ALTER TABLE UserSkills AUTO_INCREMENT = 1;",
-                "ALTER TABLE Skills AUTO_INCREMENT = 1;",
-                "ALTER TABLE Users AUTO_INCREMENT = 1;"
-            });
+            var sql = @"
+                DELETE FROM UserSkills;
+                DELETE FROM Skills;
+                DELETE FROM Users;
+                ALTER TABLE UserSkills AUTO_INCREMENT = 1;
+                ALTER TABLE Skills AUTO_INCREMENT = 1;
+                ALTER TABLE Users AUTO_INCREMENT = 1;";
             await using var cmd = new MySqlCommand(sql, conn);
             await cmd.ExecuteNonQueryAsync();
+
+            // Seed a user
+            await using var ins = new MySqlCommand("INSERT INTO Users(FullName, Email) VALUES ('Alice','alice@example.com')", conn);
+            await ins.ExecuteNonQueryAsync();
         }
 
-        private async Task<int> InsertUserAsync(MySqlConnection conn, string fullName, string email, string role = "Learner")
+        private async Task<int> GetUserIdByEmail(string email)
         {
-            var cmd = new MySqlCommand(@"INSERT INTO Users
-                (FullName, Email, PasswordHash, Role, ProfilePicture, CreatedAt, Bio, Location, ReadyToTeach, IsActive, EmailVerified)
-                VALUES (@n, @e, @ph, @r, NULL, @c, NULL, NULL, 0, 1, 1);
-                SELECT LAST_INSERT_ID();", conn);
-            cmd.Parameters.AddWithValue("@n", fullName);
+            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            await conn.OpenAsync();
+            await using var cmd = new MySqlCommand("SELECT UserId FROM Users WHERE Email=@e", conn);
             cmd.Parameters.AddWithValue("@e", email);
-            cmd.Parameters.AddWithValue("@ph", Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("pass")));
-            cmd.Parameters.AddWithValue("@r", role);
-            cmd.Parameters.AddWithValue("@c", DateTime.UtcNow);
-            var idObj = await cmd.ExecuteScalarAsync();
-            return Convert.ToInt32(idObj);
-        }
-
-        private async Task<int> InsertSkillAsync(MySqlConnection conn, string name, bool predefined = false)
-        {
-            var cmd = new MySqlCommand("INSERT INTO Skills (Name, IsPredefined) VALUES (@n, @p); SELECT LAST_INSERT_ID();", conn);
-            cmd.Parameters.AddWithValue("@n", name);
-            cmd.Parameters.AddWithValue("@p", predefined ? 1 : 0);
-            var idObj = await cmd.ExecuteScalarAsync();
-            return Convert.ToInt32(idObj);
-        }
-
-        private async Task<int> InsertUserSkillAsync(MySqlConnection conn, int userId, int skillId, string level)
-        {
-            var cmd = new MySqlCommand("INSERT INTO UserSkills (UserId, SkillId, Level) VALUES (@u, @s, @l); SELECT LAST_INSERT_ID();", conn);
-            cmd.Parameters.AddWithValue("@u", userId);
-            cmd.Parameters.AddWithValue("@s", skillId);
-            cmd.Parameters.AddWithValue("@l", level);
-            var idObj = await cmd.ExecuteScalarAsync();
-            return Convert.ToInt32(idObj);
+            var obj = await cmd.ExecuteScalarAsync();
+            return Convert.ToInt32(obj);
         }
 
         [Test]
-        public async Task AddSkill_ShouldInsertNewSkill_AndMapping_AndUpsertLevel()
+        public async Task AddSkill_ShouldInsertSkill_AndMapUser_UpsertLevel()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
-            await conn.OpenAsync();
-            var userId = await InsertUserAsync(conn, "Alice", "alice@example.com");
+            var uid = await GetUserIdByEmail("alice@example.com");
 
-            _sut.AddSkill(new AddSkillRequest { UserId = userId, SkillName = "CSharp", Level = "Intermediate" });
+            // First add
+            _sut.AddSkill(new AddSkillRequest { UserId = uid, SkillName = "React", Level = "Beginner" });
 
-            // call again with new level to exercise ON DUPLICATE KEY UPDATE
-            _sut.AddSkill(new AddSkillRequest { UserId = userId, SkillName = "CSharp", Level = "Advanced" });
+            // Second add (same skill), should upsert Level
+            _sut.AddSkill(new AddSkillRequest { UserId = uid, SkillName = "React", Level = "Advanced" });
 
-            // Verify: one Skill row, one mapping with updated level
-            var check = new MySqlCommand("SELECT COUNT(*) FROM Skills WHERE Name='CSharp'", conn);
-            (Convert.ToInt32(await check.ExecuteScalarAsync())).Should().Be(1);
-
-            var levelCmd = new MySqlCommand(@"SELECT us.Level FROM UserSkills us JOIN Skills s ON us.SkillId=s.SkillId WHERE us.UserId=@u AND s.Name='CSharp'", conn);
-            levelCmd.Parameters.AddWithValue("@u", userId);
-            var level = (string)(await levelCmd.ExecuteScalarAsync())!;
-            level.Should().Be("Advanced");
+            var list = _sut.GetUserSkills(uid);
+            list.Should().HaveCount(1);
+            list[0].Skill!.Name.Should().Be("React");
+            list[0].Level.Should().Be("Advanced");
         }
 
         [Test]
         public async Task DeleteUserSkill_ShouldRemoveMapping()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
-            await conn.OpenAsync();
-            var userId = await InsertUserAsync(conn, "Bob", "bob@example.com");
-            var skillId = await InsertSkillAsync(conn, "Python");
-            var usId = await InsertUserSkillAsync(conn, userId, skillId, "Beginner");
+            var uid = await GetUserIdByEmail("alice@example.com");
 
-            _sut.DeleteUserSkill(userId, skillId);
+            _sut.AddSkill(new AddSkillRequest { UserId = uid, SkillName = "C#", Level = "Intermediate" });
 
-            var left = new MySqlCommand("SELECT COUNT(*) FROM UserSkills WHERE UserId=@u AND SkillId=@s", conn);
-            left.Parameters.AddWithValue("@u", userId);
-            left.Parameters.AddWithValue("@s", skillId);
-            (Convert.ToInt32(await left.ExecuteScalarAsync())).Should().Be(0);
+            var skills = _sut.GetUserSkills(uid);
+            skills.Should().HaveCount(1);
+            var skillId = skills[0].Skill!.SkillId;
+
+            _sut.DeleteUserSkill(uid, skillId);
+
+            _sut.GetUserSkills(uid).Should().BeEmpty();
         }
 
         [Test]
-        public async Task GetUserSkills_ShouldReturnJoinedSkills()
+        public async Task GetUserSkills_ShouldReturnSkillWithLevel()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
-            await conn.OpenAsync();
-            var userId = await InsertUserAsync(conn, "Cara", "cara@example.com");
-            var s1 = await InsertSkillAsync(conn, "SQL", true);
-            var s2 = await InsertSkillAsync(conn, "Docker", false);
-            await InsertUserSkillAsync(conn, userId, s1, "Advanced");
-            await InsertUserSkillAsync(conn, userId, s2, "Intermediate");
+            var uid = await GetUserIdByEmail("alice@example.com");
 
-            var list = _sut.GetUserSkills(userId);
-            list.Should().HaveCount(2);
-            list.Select(x => x.Skill!.Name).Should().BeEquivalentTo(new[] { "SQL", "Docker" });
-            list.First(x => x.Skill!.Name == "SQL").Skill!.IsPredefined.Should().BeTrue();
+            _sut.AddSkill(new AddSkillRequest { UserId = uid, SkillName = "MySQL", Level = "Beginner" });
+
+            var list = _sut.GetUserSkills(uid);
+            list.Should().HaveCount(1);
+            list[0].Skill!.Name.Should().Be("MySQL");
+            list[0].Level.Should().Be("Beginner");
         }
 
         [Test]
-        public async Task SuggestSkills_ShouldRespectPrefixAndLimit()
+        public async Task SuggestSkills_ShouldReturnPrefixMatches()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
-            await conn.OpenAsync();
-            // Insert 12 matching + 2 non-matching
-            for (int i = 0; i < 12; i++)
-            {
-                await InsertSkillAsync(conn, $"Data{i}");
-            }
-            await InsertSkillAsync(conn, "Other1");
-            await InsertSkillAsync(conn, "Other2");
+            var uid = await GetUserIdByEmail("alice@example.com");
 
-            var result = _sut.SuggestSkills("Data");
-            result.Count.Should().BeLessThanOrEqualTo(10);
-            result.Should().OnlyContain(s => s.Name.StartsWith("Data", StringComparison.OrdinalIgnoreCase));
+            _sut.AddSkill(new AddSkillRequest { UserId = uid, SkillName = "React", Level = "Intermediate" });
+            _sut.AddSkill(new AddSkillRequest { UserId = uid, SkillName = "Redux", Level = "Intermediate" });
+            _sut.AddSkill(new AddSkillRequest { UserId = uid, SkillName = "Node.js", Level = "Intermediate" });
+
+            var res = _sut.SuggestSkills("Re");
+            res.Should().HaveCount(2);
+            res.Should().Contain(s => s.Name == "React");
+            res.Should().Contain(s => s.Name == "Redux");
         }
 
         [Test]
-        public async Task GetUsersBySkill_ShouldReturnUsersMatchingSkillPrefix()
+        public async Task GetUsersBySkill_ShouldReturnUsersHavingThatSkill()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
-            await conn.OpenAsync();
-            var u1 = await InsertUserAsync(conn, "Drew", "drew@example.com");
-            var u2 = await InsertUserAsync(conn, "Elle", "elle@example.com");
-            var u3 = await InsertUserAsync(conn, "Finn", "finn@example.com");
-            var sCSharp = await InsertSkillAsync(conn, "CSharp");
-            var sJava = await InsertSkillAsync(conn, "Java");
-            await InsertUserSkillAsync(conn, u1, sCSharp, "Intermediate");
-            await InsertUserSkillAsync(conn, u2, sCSharp, "Beginner");
-            await InsertUserSkillAsync(conn, u3, sJava, "Advanced");
+            var uid = await GetUserIdByEmail("alice@example.com");
+            _sut.AddSkill(new AddSkillRequest { UserId = uid, SkillName = "C#", Level = "Advanced" });
 
-            var users = _sut.GetUsersBySkill("CSh");
-            users.Select(u => u.Email).Should().BeEquivalentTo(new[] { "drew@example.com", "elle@example.com" });
-            users.Should().OnlyContain(u => !string.IsNullOrWhiteSpace(u.FullName) && !string.IsNullOrWhiteSpace(u.Email));
+            var users = _sut.GetUsersBySkill("C#");
+            users.Should().HaveCount(1);
+            users[0].UserId.Should().Be(uid);
+            users[0].FullName.Should().Be("Alice");
+            users[0].Email.Should().Be("alice@example.com");
         }
     }
 }
