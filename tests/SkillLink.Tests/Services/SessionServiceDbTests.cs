@@ -3,42 +3,41 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using MySql.Data.MySqlClient;
 using NUnit.Framework;
 using SkillLink.API.Models;
 using SkillLink.API.Services;
-using Testcontainers.MySql;
-using Microsoft.Extensions.Configuration;
 
 namespace SkillLink.Tests.Services
 {
     [TestFixture]
     public class SessionServiceDbTests
     {
-        private MySqlContainer _mysql = null!;
+        private Testcontainers.MySql.MySqlContainer _mysql = null!;
         private bool _ownsContainer = false;
         private string? _externalConnStr = null;
+
         private IConfiguration _config = null!;
-        private DbHelper _dbHelper = null!;
+        private DbHelper _db = null!;
         private SessionService _sut = null!;
+
+        // Reusable learner for Requests FK
+        private int _learnerId;
 
         [OneTimeSetUp]
         public async Task OneTimeSetup()
         {
             var external = Environment.GetEnvironmentVariable("SKILLLINK_TEST_MYSQL");
-            if (!string.IsNullOrWhiteSpace(external))
-            {
-                _externalConnStr = external;
-            }
+            if (!string.IsNullOrWhiteSpace(external)) _externalConnStr = external;
 
             var dockerHost = Environment.GetEnvironmentVariable("DOCKER_HOST");
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             var sock1 = "/var/run/docker.sock";
             var sock2 = Path.Combine(home, ".docker/run/docker.sock");
             var dockerSocketExists = File.Exists(sock1) || File.Exists(sock2);
-            var shouldRun = _externalConnStr != null || dockerSocketExists || !string.IsNullOrEmpty(dockerHost);
 
-            if (!shouldRun)
+            if (!(_externalConnStr != null || dockerSocketExists || !string.IsNullOrEmpty(dockerHost)))
             {
                 Assert.Ignore("Docker not available. Skipping SessionService DB integration tests.");
                 return;
@@ -48,7 +47,7 @@ namespace SkillLink.Tests.Services
             {
                 try
                 {
-                    _mysql = new MySqlBuilder()
+                    _mysql = new Testcontainers.MySql.MySqlBuilder()
                         .WithImage("mysql:8.0")
                         .WithDatabase("skilllink_test")
                         .WithUsername("testuser")
@@ -66,23 +65,6 @@ namespace SkillLink.Tests.Services
 
             var connStr = _externalConnStr ?? _mysql.GetConnectionString();
 
-            // Create schema
-            await using (var conn = new MySqlConnection(connStr))
-            {
-                await conn.OpenAsync();
-                var sql = @"
-                    CREATE TABLE IF NOT EXISTS Sessions (
-                        SessionId INT AUTO_INCREMENT PRIMARY KEY,
-                        RequestId INT NOT NULL,
-                        TutorId INT NOT NULL,
-                        ScheduledAt DATETIME NULL,
-                        Status VARCHAR(50) NOT NULL,
-                        CreatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-                    );";
-                await using var cmd = new MySqlCommand(sql, conn);
-                await cmd.ExecuteNonQueryAsync();
-            }
-
             _config = new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {
@@ -90,8 +72,11 @@ namespace SkillLink.Tests.Services
                 })
                 .Build();
 
-            _dbHelper = new DbHelper(_config);
-            _sut = new SessionService(_dbHelper);
+            _db = new DbHelper(_config);
+            _sut = new SessionService(_db);
+
+            // Ensure learner exists to satisfy Requests(LearnerId) -> Users(UserId)
+            _learnerId = await EnsureTestLearnerAsync(connStr);
         }
 
         [OneTimeTearDown]
@@ -106,62 +91,177 @@ namespace SkillLink.Tests.Services
         [SetUp]
         public async Task Setup()
         {
-            if (_config == null) return;
             await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
             await conn.OpenAsync();
-            await using var cmd = new MySqlCommand("DELETE FROM Sessions; ALTER TABLE Sessions AUTO_INCREMENT = 1;", conn);
+
+            // Clean child tables only; keep Users (learner and tutors)
+            var sql = @"
+                DELETE FROM Sessions;
+                ALTER TABLE Sessions AUTO_INCREMENT = 1;
+                DELETE FROM Requests;
+                ALTER TABLE Requests AUTO_INCREMENT = 1;";
+            await using var cmd = new MySqlCommand(sql, conn);
             await cmd.ExecuteNonQueryAsync();
         }
 
-        [Test]
-        public void AddSession_And_GetAll()
+        // ---------------------------
+        // Helpers: ensure test users
+        // ---------------------------
+
+        private static async Task<int> EnsureTestLearnerAsync(string connStr)
         {
-            _sut.AddSession(new Session { RequestId = 1, TutorId = 2, ScheduledAt = null, Status = "PENDING" });
+            await using var conn = new MySqlConnection(connStr);
+            await conn.OpenAsync();
+
+            var findSql = "SELECT UserId FROM Users WHERE Email LIKE 'session-test-learner@%'";
+            await using (var findCmd = new MySqlCommand(findSql, conn))
+            {
+                var maybeId = await findCmd.ExecuteScalarAsync();
+                if (maybeId != null && maybeId != DBNull.Value)
+                    return Convert.ToInt32(maybeId);
+            }
+
+            var email = $"session-test-learner@{Guid.NewGuid():N}.local";
+            var insertSql = @"
+                INSERT INTO Users
+                  (FullName, Email, PasswordHash, Role, ReadyToTeach, IsActive, EmailVerified)
+                VALUES
+                  ('Session Test Learner', @em, 'hash', 'Learner', 0, 1, 1);
+                SELECT LAST_INSERT_ID();";
+
+            await using (var cmd = new MySqlCommand(insertSql, conn))
+            {
+                cmd.Parameters.AddWithValue("@em", email);
+                var idObj = await cmd.ExecuteScalarAsync();
+                return Convert.ToInt32(idObj);
+            }
+        }
+
+        /// <summary>
+        /// Ensure a Tutor user exists and return its id.
+        /// Uses Role='Tutor' so it satisfies any role checks in SessionService.
+        /// </summary>
+        private int EnsureTestTutor(string key)
+        {
+            using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            conn.Open();
+
+            var email = $"session-test-tutor-{key}@local";
+
+            // Try find existing
+            using (var find = new MySqlCommand("SELECT UserId FROM Users WHERE Email=@em", conn))
+            {
+                find.Parameters.AddWithValue("@em", email);
+                var idObj = find.ExecuteScalar();
+                if (idObj != null && idObj != DBNull.Value)
+                    return Convert.ToInt32(idObj);
+            }
+
+            // Create tutor
+            var sql = @"
+                INSERT INTO Users
+                  (FullName, Email, PasswordHash, Role, ReadyToTeach, IsActive, EmailVerified)
+                VALUES
+                  (@name, @em, 'hash', 'Tutor', 1, 1, 1);
+                SELECT LAST_INSERT_ID();";
+
+            using var cmd = new MySqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("@name", $"Tutor {key}");
+            cmd.Parameters.AddWithValue("@em", email);
+            var newId = Convert.ToInt32(cmd.ExecuteScalar());
+            return newId;
+        }
+
+        /// <summary>
+        /// Inserts a Request owned by the reusable learner; returns RequestId.
+        /// </summary>
+        private int NewRequest(string skill = "TestSkill")
+        {
+            using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            conn.Open();
+
+            var sql = @"
+                INSERT INTO Requests (LearnerId, SkillName, Topic, Description, Status)
+                VALUES (@learner, @skill, NULL, NULL, 'OPEN');
+                SELECT LAST_INSERT_ID();";
+
+            using var cmd = new MySqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("@learner", _learnerId);
+            cmd.Parameters.AddWithValue("@skill", skill);
+            return Convert.ToInt32(cmd.ExecuteScalar());
+        }
+
+        // ---------------------------
+        // Tests
+        // ---------------------------
+
+        [Test]
+        public void AddSession_Then_GetById_ShouldReturnInserted()
+        {
+            var reqId = NewRequest("Physics");
+            var tutorId = EnsureTestTutor("add");
+
+            var s = new Session { RequestId = reqId, TutorId = tutorId, Status = "PENDING", ScheduledAt = null };
+            _sut.AddSession(s);
+
             var all = _sut.GetAllSessions();
             all.Should().HaveCount(1);
-            all[0].RequestId.Should().Be(1);
-            all[0].TutorId.Should().Be(2);
-            all[0].Status.Should().Be("PENDING");
+            var first = all[0];
+
+            var byId = _sut.GetById(first.SessionId);
+            byId.Should().NotBeNull();
+            byId!.TutorId.Should().Be(tutorId);
+            byId.RequestId.Should().Be(reqId);
+            byId.Status.Should().Be("PENDING");
         }
 
         [Test]
-        public void GetById_ShouldReturnInserted()
+        public void GetByTutorId_ShouldReturnOnlyTutorsSessions()
         {
-            _sut.AddSession(new Session { RequestId = 10, TutorId = 3, ScheduledAt = DateTime.UtcNow, Status = "SCHEDULED" });
-            var item = _sut.GetAllSessions()[0];
-            var fetched = _sut.GetById(item.SessionId);
-            fetched.Should().NotBeNull();
-            fetched!.RequestId.Should().Be(10);
-            fetched.TutorId.Should().Be(3);
+            var r1 = NewRequest("Req1");
+            var r2 = NewRequest("Req2");
+            var r3 = NewRequest("Req3");
+
+            var tutorA = EnsureTestTutor("A");
+            var tutorB = EnsureTestTutor("B");
+
+            _sut.AddSession(new Session { RequestId = r1, TutorId = tutorA, Status = "PENDING" });
+            _sut.AddSession(new Session { RequestId = r2, TutorId = tutorB, Status = "PENDING" });
+            _sut.AddSession(new Session { RequestId = r3, TutorId = tutorA, Status = "PENDING" });
+
+            var list = _sut.GetByTutorId(tutorA);
+            list.Should().HaveCount(2);
+            list.Should().OnlyContain(x => x.TutorId == tutorA);
         }
 
         [Test]
-        public void GetByTutorId_ShouldFilter()
+        public void UpdateStatus_ShouldChangeOnlyStatus()
         {
-            _sut.AddSession(new Session { RequestId = 1, TutorId = 7, ScheduledAt = null, Status = "PENDING" });
-            _sut.AddSession(new Session { RequestId = 2, TutorId = 8, ScheduledAt = null, Status = "PENDING" });
-            var list = _sut.GetByTutorId(7)!;
-            list.Should().HaveCount(1);
-            list[0].TutorId.Should().Be(7);
+            var r1 = NewRequest("Req1");
+            var tutorId = EnsureTestTutor("upd");
+
+            _sut.AddSession(new Session { RequestId = r1, TutorId = tutorId, Status = "PENDING" });
+            var first = _sut.GetAllSessions()[0];
+
+            _sut.UpdateStatus(first.SessionId, "SCHEDULED");
+
+            var updated = _sut.GetById(first.SessionId)!;
+            updated.Status.Should().Be("SCHEDULED");
+            updated.TutorId.Should().Be(tutorId);
+            updated.RequestId.Should().Be(r1);
         }
 
         [Test]
-        public void UpdateStatus_ShouldChange()
+        public void Delete_ShouldRemoveRow()
         {
-            _sut.AddSession(new Session { RequestId = 1, TutorId = 2, ScheduledAt = null, Status = "PENDING" });
-            var id = _sut.GetAllSessions()[0].SessionId;
-            _sut.UpdateStatus(id, "COMPLETED");
-            var after = _sut.GetById(id)!;
-            after.Status.Should().Be("COMPLETED");
-        }
+            var r1 = NewRequest("Req1");
+            var tutorId = EnsureTestTutor("del");
 
-        [Test]
-        public void Delete_ShouldRemove()
-        {
-            _sut.AddSession(new Session { RequestId = 1, TutorId = 2, ScheduledAt = null, Status = "PENDING" });
-            var id = _sut.GetAllSessions()[0].SessionId;
-            _sut.Delete(id);
-            _sut.GetById(id).Should().BeNull();
+            _sut.AddSession(new Session { RequestId = r1, TutorId = tutorId, Status = "PENDING" });
+            var first = _sut.GetAllSessions()[0];
+
+            _sut.Delete(first.SessionId);
+            _sut.GetById(first.SessionId).Should().BeNull();
         }
     }
 }

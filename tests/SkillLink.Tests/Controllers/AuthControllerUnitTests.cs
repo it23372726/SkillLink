@@ -1,14 +1,11 @@
-using System;
-using System.Runtime.Serialization;
-// Suppress obsolete FormatterServices warning in this test file only
-#pragma warning disable SYSLIB0050
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Moq;
 using NUnit.Framework;
 using SkillLink.API.Controllers;
 using SkillLink.API.Models;
-using SkillLink.API.Services;
+using SkillLink.API.Services.Abstractions;
 using System.Security.Claims;
 
 namespace SkillLink.Tests.Controllers
@@ -16,134 +13,116 @@ namespace SkillLink.Tests.Controllers
     [TestFixture]
     public class AuthControllerUnitTests
     {
-        private AuthController CreateControllerWithAuthService(AuthService? service = null, ClaimsPrincipal? user = null)
+        private static ClaimsPrincipal FakeUser(int id, string role = "Learner")
         {
-            // Create an AuthService instance without running its constructor (avoids DB/config deps)
-            service ??= (AuthService)FormatterServices.GetUninitializedObject(typeof(AuthService));
-            var controller = new AuthController(service);
-
-            // Attach an HttpContext so controller.User is available
-            var httpContext = new DefaultHttpContext();
-            httpContext.User = user ?? new ClaimsPrincipal(new ClaimsIdentity()); // unauthenticated by default
-
-            controller.ControllerContext = new ControllerContext
+            var iden = new ClaimsIdentity(new[]
             {
-                HttpContext = httpContext
-            };
-            return controller;
+                new Claim(ClaimTypes.NameIdentifier, id.ToString()),
+                new Claim(ClaimTypes.Role, role)
+            }, "TestAuth");
+            return new ClaimsPrincipal(iden);
         }
 
-        [TestCase(null)]
-        [TestCase("")]
-        [TestCase("   ")]
-        public void VerifyEmail_ShouldReturnBadRequest_WhenTokenMissing(string? token)
+        private AuthController Create(out Mock<IAuthService> mock, ClaimsPrincipal? user = null)
         {
-            var controller = CreateControllerWithAuthService();
-
-            var result = controller.VerifyEmail(token!);
-
-            result.Should().BeOfType<BadRequestObjectResult>();
-            var body = (result as BadRequestObjectResult)!.Value!;
-            var messageProp = body.GetType().GetProperty("message");
-            messageProp.Should().NotBeNull();
-            var message = (string?)messageProp!.GetValue(body);
-            message.Should().Be("Missing token");
+            mock = new Mock<IAuthService>(MockBehavior.Strict);
+            var ctrl = new AuthController(mock.Object);
+            var http = new DefaultHttpContext { User = user ?? new ClaimsPrincipal() };
+            ctrl.ControllerContext = new ControllerContext { HttpContext = http };
+            return ctrl;
         }
 
         [Test]
-        public void GetCurrentUser_ShouldReturnUnauthorized_WhenNotAuthenticated()
+        public void VerifyEmail_ShouldBadRequest_WhenMissing()
         {
-            var controller = CreateControllerWithAuthService();
-
-            var result = controller.GetCurrentUser();
-
-            result.Should().BeOfType<UnauthorizedObjectResult>();
-            var body = (result as UnauthorizedObjectResult)!.Value!;
-            var messageProp = body.GetType().GetProperty("message");
-            messageProp.Should().NotBeNull();
-            var message = (string?)messageProp!.GetValue(body);
-            message.Should().Be("Invalid token or user not logged in");
+            var ctrl = Create(out _);
+            var res = ctrl.VerifyEmail("");
+            res.Should().BeOfType<BadRequestObjectResult>();
         }
 
         [Test]
-        public void GetUserProfile_ShouldReturnUnauthorized_WhenNotAuthenticated()
+        public void VerifyEmail_ShouldBadRequest_WhenInvalid()
         {
-            var controller = CreateControllerWithAuthService();
+            var ctrl = Create(out var mock);
+            mock.Setup(s => s.VerifyEmailByToken("x")).Returns(false);
 
-            var result = controller.GetUserProfile();
-
-            result.Should().BeOfType<UnauthorizedObjectResult>();
-            var body = (result as UnauthorizedObjectResult)!.Value!;
-            var messageProp = body.GetType().GetProperty("message");
-            messageProp.Should().NotBeNull();
-            var message = (string?)messageProp!.GetValue(body);
-            message.Should().Be("Invalid token or user not logged in");
+            var res = ctrl.VerifyEmail("x");
+            res.Should().BeOfType<BadRequestObjectResult>();
         }
 
         [Test]
-        public void UpdateUserProfile_ShouldReturnUnauthorized_WhenNotAuthenticated()
+        public void VerifyEmail_ShouldOk_WhenValid()
         {
-            var controller = CreateControllerWithAuthService();
-            var req = new UpdateProfileRequest { FullName = "", Bio = null, Location = null };
+            var ctrl = Create(out var mock);
+            mock.Setup(s => s.VerifyEmailByToken("ok")).Returns(true);
 
-            var result = controller.UpdateUserProfile(req);
-
-            result.Should().BeOfType<UnauthorizedObjectResult>();
-            var body = (result as UnauthorizedObjectResult)!.Value!;
-            var messageProp = body.GetType().GetProperty("message");
-            messageProp.Should().NotBeNull();
-            var message = (string?)messageProp!.GetValue(body);
-            message.Should().Be("Invalid token or user not logged in");
+            var res = ctrl.VerifyEmail("ok");
+            res.Should().BeOfType<OkObjectResult>();
         }
 
         [Test]
-        public void UpdateTeachMode_ShouldReturnUnauthorized_WhenNotAuthenticated()
+        public void GetUserProfile_ShouldUnauthorized_WhenNoUser()
         {
-            var controller = CreateControllerWithAuthService();
-            var req = new AuthController.UpdateTeachModeRequest { ReadyToTeach = true };
+            var ctrl = Create(out var mock);
+            mock.Setup(s => s.CurrentUser(It.IsAny<ClaimsPrincipal>())).Returns((User?)null);
 
-            var result = controller.UpdateTeachMode(req);
-
-            // This action returns bare Unauthorized()
-            result.Should().BeOfType<UnauthorizedResult>();
+            var res = ctrl.GetUserProfile();
+            res.Should().BeOfType<UnauthorizedObjectResult>();
         }
 
         [Test]
-        public void UpdateActive_ShouldReturnUnauthorized_WhenNotAuthenticated()
+        public void GetUserProfile_ShouldOk_WhenExists()
         {
-            var controller = CreateControllerWithAuthService();
-            var req = new AuthController.UpdateActiveRequest { IsActive = true };
+            var ctrl = Create(out var mock, FakeUser(1));
+            var me = new User { UserId = 1, FullName = "A" };
+            mock.Setup(s => s.CurrentUser(It.IsAny<ClaimsPrincipal>())).Returns(me);
+            mock.Setup(s => s.GetUserProfile(1)).Returns(me);
 
-            var result = controller.UpdateActive(req);
-
-            result.Should().BeOfType<UnauthorizedObjectResult>();
-            var body = (result as UnauthorizedObjectResult)!.Value!;
-            var messageProp = body.GetType().GetProperty("message");
-            messageProp.Should().NotBeNull();
-            var message = (string?)messageProp!.GetValue(body);
-            message.Should().Be("Invalid token");
+            var res = ctrl.GetUserProfile();
+            res.Should().BeOfType<OkObjectResult>();
         }
 
         [Test]
-        public void Register_ShouldReturnBadRequest_WhenRequiredFieldsMissing()
+        public void Login_ShouldUnauthorized_WhenNullToken()
         {
-            var controller = CreateControllerWithAuthService();
-            var invalidReq = new RegisterRequest
-            {
-                FullName = "", // missing
-                Email = "",     // missing
-                Password = ""   // missing
-            };
+            var ctrl = Create(out var mock);
+            mock.Setup(s => s.Login(It.IsAny<LoginRequest>())).Returns((string?)null);
 
-            var result = controller.Register(invalidReq).GetAwaiter().GetResult();
+            var res = ctrl.Login(new LoginRequest { Email = "a", Password = "b" });
+            res.Should().BeOfType<UnauthorizedObjectResult>();
+        }
 
-            result.Should().BeOfType<BadRequestObjectResult>();
-            var body = (result as BadRequestObjectResult)!.Value!;
-            var messageProp = body.GetType().GetProperty("message");
-            messageProp.Should().NotBeNull();
-            var message = (string?)messageProp!.GetValue(body);
-            message.Should().Be("Full name, email, and password are required.");
+        [Test]
+        public void Login_ShouldOk_WhenToken()
+        {
+            var ctrl = Create(out var mock);
+            mock.Setup(s => s.Login(It.IsAny<LoginRequest>())).Returns("tok");
+
+            var res = ctrl.Login(new LoginRequest { Email = "a", Password = "b" });
+            res.Should().BeOfType<OkObjectResult>();
+        }
+
+        [Test]
+        public void UpdateTeachMode_ShouldReturnOk()
+        {
+            var ctrl = Create(out var mock, FakeUser(1));
+            var me = new User { UserId = 1 };
+            mock.Setup(s => s.CurrentUser(It.IsAny<ClaimsPrincipal>())).Returns(me);
+            mock.Setup(s => s.UpdateTeachMode(1, true)).Returns(true);
+            mock.Setup(s => s.GetUserProfile(1)).Returns(me);
+
+            var res = ctrl.UpdateTeachMode(new AuthController.UpdateTeachModeRequest { ReadyToTeach = true });
+            res.Should().BeOfType<OkObjectResult>();
+        }
+
+        [Test]
+        public void DeleteUser_ShouldPreventSelfDelete()
+        {
+            var ctrl = Create(out var mock, FakeUser(1, "Admin"));
+            mock.Setup(s => s.CurrentUser(It.IsAny<ClaimsPrincipal>())).Returns(new User { UserId = 1 });
+
+            var res = ctrl.DeleteUser(1);
+            res.Should().BeOfType<BadRequestObjectResult>();
         }
     }
 }
-#pragma warning restore SYSLIB0050

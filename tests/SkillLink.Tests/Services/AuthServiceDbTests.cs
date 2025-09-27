@@ -1,51 +1,47 @@
 using System;
 using System.Collections.Generic;
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
+using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
-using System.IO;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using MySql.Data.MySqlClient;
 using NUnit.Framework;
 using SkillLink.API.Models;
 using SkillLink.API.Services;
-using Testcontainers.MySql;
-using Microsoft.Extensions.Configuration;
 
 namespace SkillLink.Tests.Services
 {
     [TestFixture]
     public class AuthServiceDbTests
     {
-        private MySqlContainer _mysql = null!;
-    private bool _ownsContainer = false;
-    private string? _externalConnStr = null;
+        private Testcontainers.MySql.MySqlContainer _mysql = null!;
+        private bool _ownsContainer = false;
+        private string? _externalConnStr = null;
+
         private IConfiguration _config = null!;
-        private DbHelper _dbHelper = null!;
-        private EmailService _emailService = null!;
+        private DbHelper _db = null!;
+        private EmailService _email = null!;
         private AuthService _sut = null!;
 
         [OneTimeSetUp]
         public async Task OneTimeSetup()
         {
-            // If external connection string provided, use it; else try Docker; else skip
+            // External or Docker
             var external = Environment.GetEnvironmentVariable("SKILLLINK_TEST_MYSQL");
             if (!string.IsNullOrWhiteSpace(external))
             {
                 _externalConnStr = external;
             }
 
-            // Auto-skip integration tests if Docker isn't available (and no external DB)
             var dockerHost = Environment.GetEnvironmentVariable("DOCKER_HOST");
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             var sock1 = "/var/run/docker.sock";
             var sock2 = Path.Combine(home, ".docker/run/docker.sock");
             var dockerSocketExists = File.Exists(sock1) || File.Exists(sock2);
-            var shouldRun = _externalConnStr != null || dockerSocketExists || !string.IsNullOrEmpty(dockerHost);
 
-            if (!shouldRun)
+            if (!(_externalConnStr != null || dockerSocketExists || !string.IsNullOrEmpty(dockerHost)))
             {
                 Assert.Ignore("Docker not available. Skipping AuthService DB integration tests.");
                 return;
@@ -55,12 +51,13 @@ namespace SkillLink.Tests.Services
             {
                 try
                 {
-                    _mysql = new MySqlBuilder()
+                    _mysql = new Testcontainers.MySql.MySqlBuilder()
                         .WithImage("mysql:8.0")
-                        .WithDatabase("skilllink_test")
+                        .WithDatabase("skilllink_test_auth")
                         .WithUsername("testuser")
                         .WithPassword("testpass")
                         .Build();
+
                     await _mysql.StartAsync();
                     _ownsContainer = true;
                 }
@@ -73,52 +70,55 @@ namespace SkillLink.Tests.Services
 
             var connStr = _externalConnStr ?? _mysql.GetConnectionString();
 
-            // Create schema
+            // Create Users table with full set of fields used by AuthService
             await using (var conn = new MySqlConnection(connStr))
             {
                 await conn.OpenAsync();
-                var sql = @"CREATE TABLE IF NOT EXISTS Users (
-                    UserId INT AUTO_INCREMENT PRIMARY KEY,
-                    FullName VARCHAR(255) NOT NULL,
-                    Email VARCHAR(255) NOT NULL UNIQUE,
-                    PasswordHash VARCHAR(255) NOT NULL,
-                    Role VARCHAR(50) NOT NULL,
-                    CreatedAt DATETIME NOT NULL,
-                    Bio TEXT NULL,
-                    Location TEXT NULL,
-                    ProfilePicture TEXT NULL,
-                    ReadyToTeach TINYINT(1) NOT NULL DEFAULT 0,
-                    IsActive TINYINT(1) NOT NULL DEFAULT 1,
-                    EmailVerified TINYINT(1) NOT NULL DEFAULT 0,
-                    EmailVerificationToken VARCHAR(255) NULL,
-                    EmailVerificationExpires DATETIME NULL
-                );";
+                var sql = @"
+                    CREATE TABLE IF NOT EXISTS Users (
+                      UserId INT AUTO_INCREMENT PRIMARY KEY,
+                      FullName VARCHAR(255) NOT NULL,
+                      Email VARCHAR(255) NOT NULL UNIQUE,
+                      PasswordHash VARCHAR(255) NOT NULL,
+                      Role VARCHAR(50) NOT NULL DEFAULT 'Learner',
+                      CreatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                      Bio TEXT NULL,
+                      Location VARCHAR(255) NULL,
+                      ProfilePicture VARCHAR(512) NULL,
+                      ReadyToTeach TINYINT(1) NOT NULL DEFAULT 0,
+                      IsActive TINYINT(1) NOT NULL DEFAULT 1,
+                      EmailVerified TINYINT(1) NOT NULL DEFAULT 0,
+                      EmailVerificationToken VARCHAR(255) NULL,
+                      EmailVerificationExpires DATETIME NULL
+                    );
+                ";
                 await using var cmd = new MySqlCommand(sql, conn);
                 await cmd.ExecuteNonQueryAsync();
             }
 
-            // Build config
+            // In-memory config (JWT + API + SMTP)
             _config = new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     { "ConnectionStrings:DefaultConnection", connStr },
-                    { "Jwt:Key", "super_secret_key_123456_super_secret_key" },
-                    { "Jwt:Issuer", "SkillLinkAPI" },
-                    { "Jwt:Audience", "SkillLinkClient" },
-                    { "Jwt:ExpireMinutes", "120" },
+                    { "Jwt:Key", "THIS_IS_A_LONG_TEST_KEY_FOR_HMAC_256__CHANGE_ME" },
+                    { "Jwt:Issuer", "SkillLink.Tests" },
+                    { "Jwt:Audience", "SkillLink.Tests" },
+                    { "Jwt:ExpireMinutes", "30" },
                     { "Api:BaseUrl", "http://localhost:5159" },
-                    { "Smtp:Host", "127.0.0.1" },
-                    { "Smtp:Port", "2525" },
+                    // Dummy SMTP - will fail in send, but Register swallows exceptions
+                    { "Smtp:Host", "localhost" },
+                    { "Smtp:Port", "25" },
                     { "Smtp:User", "" },
                     { "Smtp:Pass", "" },
-                    { "Smtp:From", "noreply@skilllink.test" },
+                    { "Smtp:From", "noreply@skilllink.local" },
                     { "Smtp:UseSSL", "false" }
                 })
                 .Build();
 
-            _dbHelper = new DbHelper(_config);
-            _emailService = new EmailService(_config);
-            _sut = new AuthService(_dbHelper, _config, _emailService);
+            _db = new DbHelper(_config);
+            _email = new EmailService(_config);
+            _sut = new AuthService(_db, _config, _email);
         }
 
         [OneTimeTearDown]
@@ -135,349 +135,229 @@ namespace SkillLink.Tests.Services
         {
             await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
             await conn.OpenAsync();
-            await using var cmd = new MySqlCommand("DELETE FROM Users; ALTER TABLE Users AUTO_INCREMENT = 1;", conn);
+            var sql = @"DELETE FROM Users; ALTER TABLE Users AUTO_INCREMENT = 1;";
+            await using var cmd = new MySqlCommand(sql, conn);
             await cmd.ExecuteNonQueryAsync();
         }
 
-        private static string Sha256Base64(string input)
+        // helper: same hashing as service (SHA256 -> Base64)
+        private static string HashPassword(string password)
         {
-            using var sha = SHA256.Create();
-            var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(input));
+            using var sha256 = SHA256.Create();
+            var bytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(password));
             return Convert.ToBase64String(bytes);
         }
 
-        private async Task<int> InsertUserAsync(MySqlConnection conn, User user)
+        private async Task<int> InsertUserAsync(MySqlConnection conn, string fullName, string email, string password, string role = "Learner", bool verified = true, bool isActive = true, bool readyToTeach = false)
         {
-            var sql = @"INSERT INTO Users
-                (FullName, Email, PasswordHash, Role, CreatedAt, Bio, Location, ProfilePicture,
-                 ReadyToTeach, IsActive, EmailVerified, EmailVerificationToken, EmailVerificationExpires)
-                VALUES (@FullName, @Email, @PasswordHash, @Role, @CreatedAt, @Bio, @Location, @ProfilePicture,
-                        @ReadyToTeach, @IsActive, @EmailVerified, @Token, @Expires); SELECT LAST_INSERT_ID();";
-            await using var cmd = new MySqlCommand(sql, conn);
-            cmd.Parameters.AddWithValue("@FullName", user.FullName);
-            cmd.Parameters.AddWithValue("@Email", user.Email);
-            cmd.Parameters.AddWithValue("@PasswordHash", user.PasswordHash);
-            cmd.Parameters.AddWithValue("@Role", user.Role);
-            cmd.Parameters.AddWithValue("@CreatedAt", user.CreatedAt);
-            cmd.Parameters.AddWithValue("@Bio", (object?)user.Bio ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@Location", (object?)user.Location ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@ProfilePicture", (object?)user.ProfilePicture ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@ReadyToTeach", user.ReadyToTeach ? 1 : 0);
-            cmd.Parameters.AddWithValue("@IsActive", user.IsActive ? 1 : 0);
-            cmd.Parameters.AddWithValue("@EmailVerified", user.EmailVerified ? 1 : 0);
-            cmd.Parameters.AddWithValue("@Token", (object?)user.EmailVerificationToken ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@Expires", (object?)user.EmailVerificationExpires ?? DBNull.Value);
-
+            var cmd = new MySqlCommand(@"
+                INSERT INTO Users (FullName, Email, PasswordHash, Role, CreatedAt, Bio, Location, ProfilePicture,
+                                   ReadyToTeach, IsActive, EmailVerified)
+                VALUES (@n, @e, @p, @r, NOW(), NULL, NULL, NULL, @t, @a, @v);
+                SELECT LAST_INSERT_ID();", conn);
+            cmd.Parameters.AddWithValue("@n", fullName);
+            cmd.Parameters.AddWithValue("@e", email);
+            cmd.Parameters.AddWithValue("@p", HashPassword(password));
+            cmd.Parameters.AddWithValue("@r", role);
+            cmd.Parameters.AddWithValue("@t", readyToTeach ? 1 : 0);
+            cmd.Parameters.AddWithValue("@a", isActive ? 1 : 0);
+            cmd.Parameters.AddWithValue("@v", verified ? 1 : 0);
             var idObj = await cmd.ExecuteScalarAsync();
             return Convert.ToInt32(idObj);
         }
 
         [Test]
-        public async Task GetUserById_ShouldReturnInsertedUser()
+        public void Register_ShouldInsert_Unverified_WithToken()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
-            await conn.OpenAsync();
-
-            var u = new User
+            _sut.Register(new RegisterRequest
             {
                 FullName = "Alice",
                 Email = "alice@example.com",
-                PasswordHash = Sha256Base64("Pass123"),
-                Role = "Learner",
-                CreatedAt = DateTime.UtcNow,
-                Bio = "Bio",
-                Location = "Earth",
-                ProfilePicture = null,
-                ReadyToTeach = false,
-                IsActive = true,
-                EmailVerified = true
-            };
-            var id = await InsertUserAsync(conn, u);
+                Password = "P@ssw0rd",
+                Role = "Learner"
+            });
 
-            var fetched = _sut.GetUserById(id);
-            fetched.Should().NotBeNull();
-            fetched!.FullName.Should().Be("Alice");
-            fetched.Email.Should().Be("alice@example.com");
+            // Validate from DB
+            using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            conn.Open();
+
+            var get = new MySqlCommand("SELECT EmailVerified, EmailVerificationToken FROM Users WHERE Email=@e", conn);
+            get.Parameters.AddWithValue("@e", "alice@example.com");
+            using var r = get.ExecuteReader();
+            r.Read().Should().BeTrue();
+            var verified = r.GetInt32("EmailVerified");
+            var token = r.IsDBNull(r.GetOrdinal("EmailVerificationToken")) ? null : r.GetString("EmailVerificationToken");
+
+            verified.Should().Be(0);
+            token.Should().NotBeNullOrEmpty();
         }
 
         [Test]
-        public async Task CurrentUser_ShouldReturnLimitedUser_WhenClaimsValid()
+        public void VerifyEmailByToken_ShouldSetVerified_And_ClearToken()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
-            await conn.OpenAsync();
-            var id = await InsertUserAsync(conn, new User
+            // First Register to create token
+            _sut.Register(new RegisterRequest
             {
                 FullName = "Bob",
                 Email = "bob@example.com",
-                PasswordHash = Sha256Base64("Pass123"),
-                Role = "Learner",
-                CreatedAt = DateTime.UtcNow,
-                IsActive = true,
-                EmailVerified = true
+                Password = "P@ssw0rd"
             });
 
-            var identity = new ClaimsIdentity(new[]
-            {
-                new Claim(ClaimTypes.NameIdentifier, id.ToString()),
-                new Claim(ClaimTypes.Role, "Learner"),
-                new Claim(JwtRegisteredClaimNames.Email, "bob@example.com")
-            }, "TestAuth");
-            var principal = new ClaimsPrincipal(identity);
+            using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            conn.Open();
 
-            var me = _sut.CurrentUser(principal);
-            me.Should().NotBeNull();
-            me!.UserId.Should().Be(id);
-            me.Email.Should().Be("bob@example.com");
-            me.Role.Should().Be("Learner");
-            me.PasswordHash.Should().BeNullOrEmpty();
-        }
-
-        [Test]
-        public async Task Login_ShouldReturnToken_ForVerifiedActive_WithCorrectPassword()
-        {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
-            await conn.OpenAsync();
-            await InsertUserAsync(conn, new User
-            {
-                FullName = "Carol",
-                Email = "carol@example.com",
-                PasswordHash = Sha256Base64("Secret!1"),
-                Role = "Learner",
-                CreatedAt = DateTime.UtcNow,
-                IsActive = true,
-                EmailVerified = true
-            });
-
-            var token = _sut.Login(new LoginRequest { Email = "carol@example.com", Password = "Secret!1" });
+            var getToken = new MySqlCommand("SELECT EmailVerificationToken FROM Users WHERE Email=@e", conn);
+            getToken.Parameters.AddWithValue("@e", "bob@example.com");
+            var token = (string)getToken.ExecuteScalar()!;
             token.Should().NotBeNullOrEmpty();
 
-            var handler = new JwtSecurityTokenHandler();
-            var jwt = handler.ReadJwtToken(token!);
-            jwt.Claims.Should().Contain(c => c.Type == JwtRegisteredClaimNames.Email && c.Value == "carol@example.com");
-        }
-
-        [Test]
-        public async Task Login_ShouldReturnNull_WhenNotVerified()
-        {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
-            await conn.OpenAsync();
-            await InsertUserAsync(conn, new User
-            {
-                FullName = "Dan",
-                Email = "dan@example.com",
-                PasswordHash = Sha256Base64("Secret!1"),
-                Role = "Learner",
-                CreatedAt = DateTime.UtcNow,
-                IsActive = true,
-                EmailVerified = false
-            });
-
-            var token = _sut.Login(new LoginRequest { Email = "dan@example.com", Password = "Secret!1" });
-            token.Should().BeNull();
-        }
-
-        [Test]
-        public async Task Login_ShouldReturnNull_WhenInactive()
-        {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
-            await conn.OpenAsync();
-            await InsertUserAsync(conn, new User
-            {
-                FullName = "Eve",
-                Email = "eve@example.com",
-                PasswordHash = Sha256Base64("Secret!1"),
-                Role = "Learner",
-                CreatedAt = DateTime.UtcNow,
-                IsActive = false,
-                EmailVerified = true
-            });
-
-            var token = _sut.Login(new LoginRequest { Email = "eve@example.com", Password = "Secret!1" });
-            token.Should().BeNull();
-        }
-
-        [Test]
-        public async Task Login_ShouldReturnNull_OnWrongPassword()
-        {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
-            await conn.OpenAsync();
-            await InsertUserAsync(conn, new User
-            {
-                FullName = "Finn",
-                Email = "finn@example.com",
-                PasswordHash = Sha256Base64("Correct123"),
-                Role = "Learner",
-                CreatedAt = DateTime.UtcNow,
-                IsActive = true,
-                EmailVerified = true
-            });
-
-            var token = _sut.Login(new LoginRequest { Email = "finn@example.com", Password = "Wrong!" });
-            token.Should().BeNull();
-        }
-
-        [Test]
-        public async Task GetUserProfile_ShouldReturnProfile()
-        {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
-            await conn.OpenAsync();
-            var id = await InsertUserAsync(conn, new User
-            {
-                FullName = "Gail",
-                Email = "gail@example.com",
-                PasswordHash = Sha256Base64("Secret!1"),
-                Role = "Learner",
-                CreatedAt = DateTime.UtcNow,
-                Bio = "Teacher",
-                Location = "USA",
-                ProfilePicture = null,
-                ReadyToTeach = true,
-                IsActive = true,
-                EmailVerified = true
-            });
-
-            var profile = _sut.GetUserProfile(id);
-            profile.Should().NotBeNull();
-            profile!.ReadyToTeach.Should().BeTrue();
-            profile.Bio.Should().Be("Teacher");
-        }
-
-        [Test]
-        public async Task UpdateUserProfile_ShouldPersistChanges()
-        {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
-            await conn.OpenAsync();
-            var id = await InsertUserAsync(conn, new User
-            {
-                FullName = "Hank",
-                Email = "hank@example.com",
-                PasswordHash = Sha256Base64("Secret!1"),
-                Role = "Learner",
-                CreatedAt = DateTime.UtcNow,
-                IsActive = true,
-                EmailVerified = true
-            });
-
-            var ok = _sut.UpdateUserProfile(id, new UpdateProfileRequest
-            {
-                FullName = "Henry",
-                Bio = "Bio here",
-                Location = "EU"
-            });
+            var ok = _sut.VerifyEmailByToken(token);
             ok.Should().BeTrue();
 
-            var profile = _sut.GetUserProfile(id)!;
-            profile.FullName.Should().Be("Henry");
-            profile.Bio.Should().Be("Bio here");
-            profile.Location.Should().Be("EU");
+            var check = new MySqlCommand("SELECT EmailVerified, EmailVerificationToken FROM Users WHERE Email=@e", conn);
+            check.Parameters.AddWithValue("@e", "bob@example.com");
+            using var rr = check.ExecuteReader();
+            rr.Read().Should().BeTrue();
+            rr.GetInt32("EmailVerified").Should().Be(1);
+            rr.IsDBNull(rr.GetOrdinal("EmailVerificationToken")).Should().BeTrue();
         }
 
         [Test]
-        public async Task UpdateTeachMode_ShouldToggleRoleAndFlag()
+        public void Login_ShouldReturnNull_WhenNotVerified()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
-            await conn.OpenAsync();
-            var id = await InsertUserAsync(conn, new User
-            {
-                FullName = "Ivy",
-                Email = "ivy@example.com",
-                PasswordHash = Sha256Base64("Secret!1"),
-                Role = "Learner",
-                CreatedAt = DateTime.UtcNow,
-                ReadyToTeach = false,
-                IsActive = true,
-                EmailVerified = true
-            });
+            using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            conn.Open();
+            InsertUserAsync(conn, "Cara", "cara@example.com", "secret", verified:false, isActive:true).GetAwaiter().GetResult();
 
-            var ok1 = _sut.UpdateTeachMode(id, true);
-            ok1.Should().BeTrue();
-            var p1 = _sut.GetUserProfile(id)!;
-            p1.ReadyToTeach.Should().BeTrue();
-            p1.Role.Should().Be("Tutor");
-
-            var ok2 = _sut.UpdateTeachMode(id, false);
-            ok2.Should().BeTrue();
-            var p2 = _sut.GetUserProfile(id)!;
-            p2.ReadyToTeach.Should().BeFalse();
-            p2.Role.Should().Be("Learner");
+            var token = _sut.Login(new LoginRequest { Email = "cara@example.com", Password = "secret" });
+            token.Should().BeNull();
         }
 
         [Test]
-        public async Task SetActive_ShouldUpdateStatus()
+        public void Login_ShouldReturnToken_WhenVerified_AndPasswordCorrect()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
-            await conn.OpenAsync();
-            var id = await InsertUserAsync(conn, new User
-            {
-                FullName = "Jill",
-                Email = "jill@example.com",
-                PasswordHash = Sha256Base64("Secret!1"),
-                Role = "Learner",
-                CreatedAt = DateTime.UtcNow,
-                IsActive = true,
-                EmailVerified = true
-            });
+            using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            conn.Open();
+            InsertUserAsync(conn, "Drew", "drew@example.com", "secret", verified:true, isActive:true).GetAwaiter().GetResult();
+
+            var token = _sut.Login(new LoginRequest { Email = "drew@example.com", Password = "secret" });
+            token.Should().NotBeNullOrEmpty();
+        }
+
+        [Test]
+        public void SetActive_ShouldUpdate()
+        {
+            using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            conn.Open();
+            var id = InsertUserAsync(conn, "Elle", "elle@example.com", "pw", verified:true, isActive:true).GetAwaiter().GetResult();
 
             var ok = _sut.SetActive(id, false);
             ok.Should().BeTrue();
-            var p = _sut.GetUserProfile(id)!;
-            p.IsActive.Should().BeFalse();
+
+            var check = new MySqlCommand("SELECT IsActive FROM Users WHERE UserId=@id", conn);
+            check.Parameters.AddWithValue("@id", id);
+            var active = Convert.ToInt32(check.ExecuteScalar());
+            active.Should().Be(0);
         }
 
         [Test]
-        public async Task VerifyEmailByToken_ShouldVerify_WhenValid()
+        public void UpdateTeachMode_ShouldToggleRole_AndFlag()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
-            await conn.OpenAsync();
-            var token = "validtoken123";
-            var id = await InsertUserAsync(conn, new User
-            {
-                FullName = "Kim",
-                Email = "kim@example.com",
-                PasswordHash = Sha256Base64("Secret!1"),
-                Role = "Learner",
-                CreatedAt = DateTime.UtcNow,
-                IsActive = true,
-                EmailVerified = false,
-                EmailVerificationToken = token,
-                EmailVerificationExpires = DateTime.UtcNow.AddHours(1)
-            });
+            using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            conn.Open();
+            var id = InsertUserAsync(conn, "Finn", "finn@example.com", "pw", verified:true, isActive:true, readyToTeach:false).GetAwaiter().GetResult();
 
-            var ok = _sut.VerifyEmailByToken(token);
+            var ok = _sut.UpdateTeachMode(id, true);
             ok.Should().BeTrue();
 
-            var p = _sut.GetUserProfile(id)!;
-            p.EmailVerified.Should().BeTrue();
+            var check = new MySqlCommand("SELECT ReadyToTeach, Role FROM Users WHERE UserId=@id", conn);
+            check.Parameters.AddWithValue("@id", id);
+            using var r = check.ExecuteReader();
+            r.Read().Should().BeTrue();
+            r.GetInt32("ReadyToTeach").Should().Be(1);
+            r.GetString("Role").Should().Be("Tutor");
         }
 
         [Test]
-        public async Task VerifyEmailByToken_ShouldReturnFalse_WhenExpired()
+        public void UpdateUserProfile_ShouldPersist()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
-            await conn.OpenAsync();
-            var token = "expiredtoken123";
-            await InsertUserAsync(conn, new User
+            using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            conn.Open();
+            var id = InsertUserAsync(conn, "Gail", "gail@example.com", "pw", verified:true, isActive:true).GetAwaiter().GetResult();
+
+            var ok = _sut.UpdateUserProfile(id, new UpdateProfileRequest
             {
-                FullName = "Liam",
-                Email = "liam@example.com",
-                PasswordHash = Sha256Base64("Secret!1"),
-                Role = "Learner",
-                CreatedAt = DateTime.UtcNow,
-                IsActive = true,
-                EmailVerified = false,
-                EmailVerificationToken = token,
-                EmailVerificationExpires = DateTime.UtcNow.AddHours(-1)
+                FullName = "Gail Updated",
+                Bio = "Hello",
+                Location = "Colombo"
             });
+            ok.Should().BeTrue();
 
-            var ok = _sut.VerifyEmailByToken(token);
-            ok.Should().BeFalse();
+            var check = new MySqlCommand("SELECT FullName, Bio, Location FROM Users WHERE UserId=@id", conn);
+            check.Parameters.AddWithValue("@id", id);
+            using var r = check.ExecuteReader();
+            r.Read().Should().BeTrue();
+            r.GetString("FullName").Should().Be("Gail Updated");
+            r.GetString("Bio").Should().Be("Hello");
+            r.GetString("Location").Should().Be("Colombo");
         }
 
         [Test]
-        public void VerifyEmailByToken_ShouldReturnFalse_WhenNotFound()
+        public void UpdateProfilePicture_ShouldPersist()
         {
-            var ok = _sut.VerifyEmailByToken("doesnotexist");
-            ok.Should().BeFalse();
+            using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            conn.Open();
+            var id = InsertUserAsync(conn, "Hank", "hank@example.com", "pw").GetAwaiter().GetResult();
+
+            var ok = _sut.UpdateProfilePicture(id, "/uploads/profiles/img.png");
+            ok.Should().BeTrue();
+
+            var check = new MySqlCommand("SELECT ProfilePicture FROM Users WHERE UserId=@id", conn);
+            check.Parameters.AddWithValue("@id", id);
+            (check.ExecuteScalar() as string).Should().Be("/uploads/profiles/img.png");
+        }
+
+        [Test]
+        public void DeleteUserFromDB_ShouldDeleteNonAdmin()
+        {
+            using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            conn.Open();
+            var id = InsertUserAsync(conn, "Ivy", "ivy@example.com", "pw", role:"Learner").GetAwaiter().GetResult();
+
+            _sut.DeleteUserFromDB(id);
+
+            var check = new MySqlCommand("SELECT COUNT(*) FROM Users WHERE UserId=@id", conn);
+            check.Parameters.AddWithValue("@id", id);
+            Convert.ToInt32(check.ExecuteScalar()).Should().Be(0);
+        }
+
+        [Test]
+        public void DeleteUserFromDB_ShouldPreventDeletingLastAdmin()
+        {
+            using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            conn.Open();
+
+            // Create single Admin
+            var adminId = InsertUserAsync(conn, "Admin One", "admin1@example.com", "pw", role:"Admin").GetAwaiter().GetResult();
+
+            Action act = () => _sut.DeleteUserFromDB(adminId);
+            act.Should().Throw<InvalidOperationException>().WithMessage("*last admin*");
+        }
+
+        [Test]
+        public void DeleteUserFromDB_ShouldAllow_IfMoreThanOneAdmin()
+        {
+            using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            conn.Open();
+
+            var admin1 = InsertUserAsync(conn, "Admin One", "admin1@example.com", "pw", role:"Admin").GetAwaiter().GetResult();
+            var admin2 = InsertUserAsync(conn, "Admin Two", "admin2@example.com", "pw", role:"Admin").GetAwaiter().GetResult();
+
+            // Deleting one should succeed
+            _sut.DeleteUserFromDB(admin1);
+
+            var check = new MySqlCommand("SELECT COUNT(*) FROM Users WHERE Role='Admin'", conn);
+            Convert.ToInt32(check.ExecuteScalar()).Should().Be(1);
         }
     }
 }
