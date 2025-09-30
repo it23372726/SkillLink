@@ -1,4 +1,4 @@
-name: Build, Test & Deploy SkillLink
+name: Build, Test & Deploy SkillLink Sithu
 
 on:
   push:
