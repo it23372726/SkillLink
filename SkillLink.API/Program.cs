@@ -10,21 +10,28 @@ using SkillLink.API.Services.Abstractions;
 using Microsoft.OpenApi.Models;
 using Swashbuckle.AspNetCore.SwaggerUI;
 using SkillLink.API.Seeding;
-
-
-
+using DotNetEnv;
 
 // ----------------------------------------
 // CONFIGURE SERVICES
 // ----------------------------------------
 var builder = WebApplication.CreateBuilder(args);
 
+if (builder.Environment.IsDevelopment())
+{
+    Env.Load();
+}
+
+builder.Configuration
+    .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+    .AddEnvironmentVariables(); // load env vars from Azure or GitHub secrets
+
 // Add services
 builder.Services.AddSingleton<DbHelper>();
 // builder.Services.AddScoped<RequestService>();
 // builder.Services.AddScoped<SessionService>();
 
-// ✅ Register interfaces -> implementations (make sure classes implement these)
+// Register interfaces -> implementations (make sure classes implement these)
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IAdminService, AdminService>();
 builder.Services.AddSingleton<EmailService>();
