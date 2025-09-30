@@ -36,3 +36,5 @@ TestResults/
 dist/
 build/
 coverage/
+
+SkillLink.API/obj/

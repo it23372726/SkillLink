@@ -11,7 +11,7 @@ namespace SkillLink.API.Seeding
     public static class DbSeeder
     {
         // Adjust if your schema uses different names/casing
-        private const string USERS_TABLE = "users";
+        private const string USERS_TABLE = "Users";
         private const string COL_EMAIL   = "Email";
         private const string COL_PASS    = "PasswordHash";
         private const string COL_ROLE    = "Role";
