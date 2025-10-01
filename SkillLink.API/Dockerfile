@@ -22,4 +22,4 @@ WORKDIR /app
 COPY --from=publish /app/publish .
 
 # Set entrypoint
-ENTRYPOINT ["dotnet", "SkillLink.dll"]
+ENTRYPOINT ["dotnet", "SkillLink.API.dll"]
