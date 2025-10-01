@@ -31,6 +31,11 @@ It allows students to **offer skills**, **request help**, **schedule sessions**,
 
 ```
 api/SkillLink.API
+├─ docs/
+│  ├─ TECHNICAL_OVERVIEW.md
+│  ├─ API_SPEC.md
+│  ├─ FRONTEND_NOTES.md
+│  └─ CODE_COMMENTS_GUIDE.md
 ├── bin
 ├── Controllers
 ├── Data
