@@ -1,142 +1,47 @@
-using MySql.Data.MySqlClient;
 using SkillLink.API.Models;
+using SkillLink.API.Repositories.Abstractions;
 using SkillLink.API.Services.Abstractions;
 
 namespace SkillLink.API.Services
 {
     public class SkillService : ISkillService
     {
-        private readonly DbHelper _dbHelper;
-        private readonly IAuthService _authService;
+        private readonly ISkillRepository _repo;
+        private readonly IAuthService _auth;
 
-        public SkillService(DbHelper dbHelper, IAuthService authService)
+        public SkillService(ISkillRepository repo, IAuthService authService)
         {
-            _dbHelper = dbHelper;
-            _authService = authService;
+            _repo = repo;
+            _auth = authService;
         }
 
-        // Add Skill to a User
         public void AddSkill(AddSkillRequest req)
         {
-            using var conn = _dbHelper.GetConnection();
-            conn.Open();
+            // 1) Ensure skill exists
+            var skillId = _repo.GetSkillIdByName(req.SkillName)
+                        ?? _repo.InsertSkill(req.SkillName, isPredefined: false);
 
-            // 1. Check if skill already exists
-            int skillId;
-            using (var checkCmd = new MySqlCommand("SELECT SkillId FROM Skills WHERE Name=@name", conn))
-            {
-                checkCmd.Parameters.AddWithValue("@name", req.SkillName);
-                var result = checkCmd.ExecuteScalar();
-                if (result != null)
-                {
-                    skillId = Convert.ToInt32(result);
-                }
-                else
-                {
-                    // Insert new skill
-                    using var insertCmd = new MySqlCommand("INSERT INTO Skills (Name, IsPredefined) VALUES (@name, 0)", conn);
-                    insertCmd.Parameters.AddWithValue("@name", req.SkillName);
-                    insertCmd.ExecuteNonQuery();
-                    skillId = (int)insertCmd.LastInsertedId;
-                }
-            }
-
-            // 2. Add mapping into UserSkills
-            using var mapCmd = new MySqlCommand(
-                "INSERT INTO UserSkills (UserId, SkillId, Level) VALUES (@uid, @sid, @level) ON DUPLICATE KEY UPDATE Level=@level",
-                conn
-            );
-            mapCmd.Parameters.AddWithValue("@uid", req.UserId);
-            mapCmd.Parameters.AddWithValue("@sid", skillId);
-            mapCmd.Parameters.AddWithValue("@level", req.Level);
-            mapCmd.ExecuteNonQuery();
+            // 2) Map to user (upsert)
+            _repo.UpsertUserSkill(req.UserId, skillId, req.Level);
         }
 
-        // Delete Skill from a User
-        public void DeleteUserSkill(int userId, int skillId)
-        {
-            using var conn = _dbHelper.GetConnection();
-            conn.Open();
+        public void DeleteUserSkill(int userId, int skillId) =>
+            _repo.DeleteUserSkill(userId, skillId);
 
-            using var cmd = new MySqlCommand("DELETE FROM UserSkills WHERE UserId=@uid AND SkillId=@sid", conn);
-            cmd.Parameters.AddWithValue("@uid", userId);
-            cmd.Parameters.AddWithValue("@sid", skillId);
-            cmd.ExecuteNonQuery();
-        }
+        public List<UserSkill> GetUserSkills(int userId) =>
+            _repo.GetUserSkillsWithSkill(userId);
 
-        // Get all skills of a user
-        public List<UserSkill> GetUserSkills(int userId)
-        {
-            var list = new List<UserSkill>();
-            using var conn = _dbHelper.GetConnection();
-            conn.Open();
+        public List<Skill> SuggestSkills(string query) =>
+            _repo.SuggestSkillsByPrefix(query);
 
-            using var cmd = new MySqlCommand(@"
-                SELECT us.UserSkillId, us.Level, s.SkillId, s.Name, s.IsPredefined
-                FROM UserSkills us
-                JOIN Skills s ON us.SkillId = s.SkillId
-                WHERE us.UserId=@uid", conn);
-
-            cmd.Parameters.AddWithValue("@uid", userId);
-
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
-            {
-                list.Add(new UserSkill
-                {
-                    UserSkillId = reader.GetInt32("UserSkillId"),
-                    SkillId = reader.GetInt32("SkillId"),
-                    UserId = userId,
-                    Level = reader.GetString("Level"),
-                    Skill = new Skill
-                    {
-                        SkillId = reader.GetInt32("SkillId"),
-                        Name = reader.GetString("Name"),
-                        IsPredefined = reader.GetBoolean("IsPredefined")
-                    }
-                });
-            }
-            return list;
-        }
-
-        // Suggest skills (autocomplete)
-        public List<Skill> SuggestSkills(string query)
-        {
-            var list = new List<Skill>();
-            using var conn = _dbHelper.GetConnection();
-            conn.Open();
-
-            using var cmd = new MySqlCommand("SELECT * FROM Skills WHERE Name LIKE @q LIMIT 10", conn);
-            cmd.Parameters.AddWithValue("@q", query + "%");
-
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
-            {
-                list.Add(new Skill
-                {
-                    SkillId = reader.GetInt32("SkillId"),
-                    Name = reader.GetString("Name"),
-                    IsPredefined = reader.GetBoolean("IsPredefined")
-                });
-            }
-            return list;
-        }
-
-        // Filter users by skill
         public List<User> GetUsersBySkill(string query)
         {
+            var userIds = _repo.GetUserIdsBySkillPrefix(query);
             var users = new List<User>();
-            using var conn = _dbHelper.GetConnection();
-            conn.Open();
-
-            using var cmd = new MySqlCommand("SELECT us.UserId FROM UserSkills us JOIN Skills s ON us.SkillId = s.SkillId WHERE s.Name LIKE @name LIMIT 10", conn);
-            cmd.Parameters.AddWithValue("@name", query + "%");
-
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
+            foreach (var id in userIds)
             {
-                users.Add( _authService.GetUserById(reader.GetInt32("UserId")));
-                
+                var u = _auth.GetUserById(id);
+                if (u != null) users.Add(u);
             }
             return users;
         }

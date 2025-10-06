@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Mvc;
 using SkillLink.API.Dtos.Auth;
 using SkillLink.API.Models;
 using SkillLink.API.Services.Abstractions;
+using Microsoft.Data.SqlClient;
+
 
 namespace SkillLink.API.Controllers
 {
@@ -238,7 +240,7 @@ namespace SkillLink.API.Controllers
             {
                 return Conflict(new { message = ex.Message });
             }
-            catch (MySql.Data.MySqlClient.MySqlException ex) when (ex.Number == 1451)
+            catch (SqlException ex) when (ex.Number == 547)
             {
                 return Conflict(new { message = "Cannot delete this user due to related data. Remove or reassign their data first." });
             }
