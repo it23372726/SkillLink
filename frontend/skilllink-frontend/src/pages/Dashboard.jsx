@@ -1,12 +1,11 @@
-// src/pages/Dashboard.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import api from "../api/axios";
-import { toImageUrl } from "../api/base";
+import { toImageUrl } from "../utils/image";
 import { ensureThemeFromStorage, toggleTheme } from "../utils/theme";
 import Dock from "../components/Dock";
+import { authApi, requestsApi } from "../api";
 
-// ---------- Small UI atoms (reusing from UserProfile) ----------
+/* -------------------- small UI atoms -------------------- */
 const GlassCard = ({ className = "", children }) => (
   <div
     className={
@@ -17,7 +16,6 @@ const GlassCard = ({ className = "", children }) => (
   >
     {children}
   </div>
-  
 );
 
 const GlassBar = ({ className = "", children }) => (
@@ -40,8 +38,8 @@ const MacButton = ({ className = "", children, ...props }) => (
       " bg-white/50 hover:bg-black/5 dark:hover:bg-white/10 active:bg-white/80 " +
       " dark:bg-ink-800/60 dark:hover:bg-ink-800/80 " +
       " focus:outline-none focus:ring-1 focus:ring-blue-400/30 dark:focus:text-white/80 focus:text-black" +
-      " text-black/80  dark:text-white/65 active:dark:text-white active:text-black"+
-      className
+      " text-black/80 dark:text-white/65 active:dark:text-white active:text-black" +
+      (className ? " " + className : "")
     }
     {...props}
   >
@@ -49,14 +47,14 @@ const MacButton = ({ className = "", children, ...props }) => (
   </button>
 );
 
-const MacPrimary = (props) => (
+const MacPrimary = ({ className = "", ...props }) => (
   <button
     {...props}
     className={
       "px-4 py-2 rounded-xl text-sm transition text-white " +
       "bg-blue-600 hover:bg-blue-700 active:bg-blue-800 " +
       "focus:outline-none focus:ring-2 focus:ring-blue-400/40 " +
-      (props.className || "")
+      className
     }
   />
 );
@@ -73,28 +71,38 @@ const Chip = ({ children, className = "" }) => (
 );
 
 const statusStyles = {
-  PENDING: "bg-yellow-200/60 text-yellow-900 dark:bg-yellow-400/20 dark:text-yellow-200",
-  SCHEDULED: "bg-blue-200/60 text-blue-900 dark:bg-blue-400/20 dark:text-blue-200",
-  COMPLETED: "bg-emerald-200/60 text-emerald-900 dark:bg-emerald-400/20 dark:text-emerald-200",
-  CANCELLED: "bg-red-200/60 text-red-900 dark:bg-red-400/20 dark:text-red-200",
+  PENDING:
+    "bg-yellow-200/60 text-yellow-900 dark:bg-yellow-400/20 dark:text-yellow-200",
+  SCHEDULED:
+    "bg-blue-200/60 text-blue-900 dark:bg-blue-400/20 dark:text-blue-200",
+  COMPLETED:
+    "bg-emerald-200/60 text-emerald-900 dark:bg-emerald-400/20 dark:text-emerald-200",
+  CANCELLED:
+    "bg-red-200/60 text-red-900 dark:bg-red-400/20 dark:text-red-200",
 };
 
 function Dashboard() {
   const navigate = useNavigate();
   const [me, setMe] = useState(null);
   const [profile, setProfile] = useState(null);
+
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadingReq, setLoadingReq] = useState(true);
   const [err, setErr] = useState("");
+  const [reqErr, setReqErr] = useState("");
+
+  useEffect(() => {
+    ensureThemeFromStorage?.();
+  }, []);
 
   useEffect(() => {
     const init = async () => {
       try {
         setLoading(true);
         const [meRes, profileRes] = await Promise.all([
-          api.get("/auth/me"),
-          api.get("/auth/profile"),
+          authApi.me(),
+          authApi.getProfile(),
         ]);
         setMe(meRes.data);
         setProfile(profileRes.data);
@@ -111,18 +119,18 @@ function Dashboard() {
     const loadReqs = async () => {
       try {
         setLoadingReq(true);
-        const res = await api.get("/requests");
+        setReqErr("");
+        const res = await requestsApi.list();
         setRequests(res.data || []);
+      } catch (e) {
+        console.error(e);
+        setReqErr("Failed to load requests");
       } finally {
         setLoadingReq(false);
       }
     };
     loadReqs();
   }, []);
-  useEffect(() => {
-    ensureThemeFromStorage();
-  }, []);
-
 
   const stats = useMemo(() => {
     const total = requests.length;
@@ -153,9 +161,10 @@ function Dashboard() {
 
   const avatarUrl = toImageUrl(profile?.profilePicture);
   const firstLetter = profile?.fullName?.[0]?.toUpperCase() || "U";
-  const isAdmin = me?.role === "Admin";
-  const isTutor = me?.role === "Tutor" || profile?.readyToTeach;
 
+  const role = (me?.role || "").toString().toUpperCase();
+  const isAdmin = role === "ADMIN";
+  const isTutor = role === "TUTOR" || profile?.readyToTeach;
 
   return (
     <div className="relative min-h-screen font-sans">
@@ -169,23 +178,25 @@ function Dashboard() {
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 shadow" />
             <div className="text-slate-700 dark:text-slate-200 font-semibold">SkillLink</div>
           </div>
-            <div className=" flex gap-12 items-center text-xs text-slate-500 dark:text-slate-400">
-              <div className="flex gap-3">
-                {isAdmin ? (
-                  <MacPrimary onClick={() => navigate("/admin-dashboard")}>
-                    Admin Panel
-                  </MacPrimary>
-                ):
-                <p>Dashboard</p>}
-              </div>
-              <button
-                data-testid="theme-toggle"
-                onClick={toggleTheme}
-                className="px-3 py-1.5 rounded-full glass text-sm"
-              >
-                <i className="fas fa-moon"></i> {/*  darkmode icon */}
-              </button>
+          <div className=" flex gap-12 items-center text-xs text-slate-500 dark:text-slate-400">
+            <div className="flex gap-3">
+              {isAdmin ? (
+                <MacPrimary onClick={() => navigate("/admin-dashboard")}>
+                  Admin Panel
+                </MacPrimary>
+              ) : (
+                <p>Dashboard</p>
+              )}
             </div>
+            <button
+              data-testid="theme-toggle"
+              onClick={toggleTheme}
+              className="px-3 py-1.5 rounded-full glass text-sm"
+              aria-label="Toggle theme"
+            >
+              <i className="fas fa-moon"></i>
+            </button>
+          </div>
         </div>
       </GlassBar>
 
@@ -261,6 +272,8 @@ function Dashboard() {
           </div>
           {loadingReq ? (
             <div className="p-6 text-slate-500 dark:text-slate-400">Loading…</div>
+          ) : reqErr ? (
+            <div className="p-6 text-red-600">{reqErr}</div>
           ) : requests.length === 0 ? (
             <div className="p-6 text-slate-500 dark:text-slate-400">
               No requests yet. Create your first one!
@@ -281,7 +294,7 @@ function Dashboard() {
                     )}
                   </div>
                   <div className="flex items-center gap-2">
-                    <Chip className={statusStyles[r.status]}>{r.status}</Chip>
+                    <Chip className={statusStyles[r.status] || ""}>{r.status}</Chip>
                     {r.status === "SCHEDULED" && (
                       <MacPrimary onClick={() => navigate("/VideoSession")}>
                         Join
@@ -294,14 +307,14 @@ function Dashboard() {
           )}
         </GlassCard>
 
-        {/* Quick actions dock */}
+        {/* Dock */}
         <Dock peek={18}>
           <MacButton onClick={() => navigate("/home")}>Home</MacButton>
           <MacButton onClick={() => navigate("/request")}>+ Request</MacButton>
           <MacButton onClick={() => navigate("/skill")}>Skills</MacButton>
           <MacButton onClick={() => navigate("/VideoSession")}>Session</MacButton>
           <MacButton onClick={() => navigate("/profile")}>Profile</MacButton>
-      </Dock>
+        </Dock>
       </div>
     </div>
   );

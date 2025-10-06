@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useAuth } from "../context/AuthContext";
-import api from "../api/axios";
-import { toImageUrl } from "../api/base";
+// import api from "../api/axios";
+import { toImageUrl } from "../utils/image";
 import { useNavigate } from "react-router-dom";
 import Dock from "../components/Dock";
+import { skillsApi } from "../api";
 
 /* -------------------------- utils -------------------------- */
 const debounce = (fn, delay = 300) => {
@@ -116,13 +117,13 @@ const SkillsManagement = () => {
   const [isFiltering, setIsFiltering] = useState(false);
   const [activeExploreSkill, setActiveExploreSkill] = useState("");
 
-  /* ------------ loaders (memoized to satisfy hooks rule) ------------ */
+  /* ------------ loaders ------------ */
   const loadSkills = useCallback(async () => {
     const uid = user?.userId;
     if (!uid) return;
     try {
       setIsLoadingSkills(true);
-      const res = await api.get(`/skills/user/${uid}`);
+      const res = await skillsApi.byUser(`${uid}`);
       setSkills(res.data || []);
     } catch (e) {
       console.error("Load skills failed:", e);
@@ -160,13 +161,11 @@ const SkillsManagement = () => {
         }
         try {
           setSLoading(true);
-          // use axios params to encode safely
-          const res = await api.get("/skills/suggest", { params: { q } });
+          const res = await skillsApi.suggest(`${q}`);
           setSuggestions(res.data || []);
           setSOpen(true);
           setSIndex(-1);
         } catch (err) {
-          // ignore 400 from server (bad q)
           if (err?.response?.status !== 400) {
             console.error("Suggest error:", err);
           }
@@ -183,7 +182,6 @@ const SkillsManagement = () => {
   /* ------------------- handlers ------------------- */
   const onQueryChange = (e) => {
     const v = e.target.value;
-    // collapse multiple spaces to single; prevents "  " → 400
     const sanitized = v.replace(/\s{2,}/g, " ");
     setQuery(sanitized);
     debouncedSuggest(sanitized);
@@ -217,11 +215,7 @@ const SkillsManagement = () => {
         ...prev,
       ]);
 
-      await api.post("/skills/add", {
-        userId: user.userId,
-        skillName: name,
-        level,
-      });
+      await skillsApi.add(user.userId, name, level,);
 
       showToast("success", "Skill added");
       setQuery("");
@@ -239,7 +233,7 @@ const SkillsManagement = () => {
     if (!window.confirm("Remove this skill?")) return;
     try {
       setSkills((prev) => prev.filter((s) => s.skillId !== skillId));
-      await api.delete(`/skills/${user.userId}/${skillId}`);
+      await skillsApi.remove(`${user.userId}`,`${skillId}`);
       showToast("success", "Skill removed");
     } catch (e) {
       console.error(e);
@@ -252,7 +246,7 @@ const SkillsManagement = () => {
     try {
       setIsFiltering(true);
       setActiveExploreSkill(name);
-      const res = await api.get(`/skills/filter`, { params: { skill: name } });
+      const res = await skillsApi.filterBySkill(`${name }`);
       setFilteredUsers(res.data || []);
     } catch (e) {
       console.error("Explore error:", e);
@@ -314,6 +308,7 @@ const SkillsManagement = () => {
                   ? "bg-red-50 text-red-700"
                   : "bg-blue-50 text-blue-700"
               }`}
+              role="status"
             >
               {toast.text}
             </div>
@@ -441,6 +436,7 @@ const SkillsManagement = () => {
                           deleteSkill(s.skillId);
                         }}
                         title="Remove skill"
+                        aria-label="Remove skill"
                       >
                         <i className="fas fa-trash-alt"></i>
                       </button>

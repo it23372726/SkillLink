@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import api from "../api/axios";
-import { toImageUrl } from "../api/base";
+// import api from "../api/axios";
+import { toImageUrl } from "../utils/image";
 import { useAuth } from "../context/AuthContext";
 import Dock from "../components/Dock";
+import { authApi, friendsApi, requestsApi, skillsApi } from "../api";
 
 /* ========================== small atoms ========================== */
 const GlassCard = ({ className = "", children }) => (
@@ -42,7 +43,7 @@ const MacButton = ({ className = "", children, ...props }) => (
       " dark:bg-ink-800/60 dark:hover:bg-ink-800/80 " +
       " focus:outline-none focus:ring-1 focus:ring-blue-400/30 dark:focus:text-white/80 focus:text-black" +
       " text-black/80  dark:text-white/65 active:dark:text-white active:text-black"+
-      className
+      (className ? " " + className : "")
     }
   >
     {children}
@@ -70,11 +71,12 @@ const MacDanger = (props) => (
     }
   />
 );
-const MacToggle = ({ checked, onChange, disabled }) => (
+const MacToggle = ({ checked, onClick, onChange, disabled }) => (
   <button
     type="button"
     disabled={disabled}
-    onClick={onChange}
+    onClick={onClick}
+    onChange={onChange}
     aria-pressed={checked}
     className={
       "relative inline-flex h-7 w-12 items-center rounded-full transition-colors " +
@@ -97,13 +99,13 @@ const Chip = ({ children, className = "" }) => (
     {children}
   </span>
 );
-const SectionCard = ({ title, action, children }) => (
-  <GlassCard className="p-6">
+const SectionCard = ({ title, className = "", action, children }) => (
+  <GlassCard className={"p-6"}>
     <div className="flex items-center justify-between border-b border-black/10 dark:border-white/10 pb-4 mb-4">
       <h3 className="text-lg font-semibold text-ink-800 dark:text-ink-100">{title}</h3>
       {action}
     </div>
-    <div>{children}</div>
+    <div className={className}>{children}</div>
   </GlassCard>
 );
 
@@ -156,7 +158,7 @@ const UserProfile = () => {
   const [skills, setSkills] = useState([]);
   const [loadingSkills, setLoadingSkills] = useState(true);
 
-  // ✅ social (followers/following)
+  // social
   const [followersCount, setFollowersCount] = useState(0);
   const [followingCount, setFollowingCount] = useState(0);
   const [loadingSocial, setLoadingSocial] = useState(true);
@@ -180,9 +182,10 @@ const UserProfile = () => {
   // tabs
   const [tab, setTab] = useState("overview"); // overview | teaching | learning
 
-  // ---- profile photo edit state ----
+  // photo state
   const [photoFile, setPhotoFile] = useState(null);
   const [photoPreview, setPhotoPreview] = useState("");
+
   const prevent = (e) => { e.preventDefault(); e.stopPropagation(); };
 
   const setProfileFile = (file) => {
@@ -212,15 +215,11 @@ const UserProfile = () => {
 
   const uploadProfilePhoto = async () => {
     if (!photoFile) return;
-    const data = new FormData();
-    data.append("profilePicture", photoFile);
-    await api.put("/auth/profile/photo", data, {
-      headers: { "Content-Type": "multipart/form-data" },
-    });
+    await authApi.uploadPhoto(photoFile);
   };
   const removeProfilePhoto = async () => {
     try {
-      await api.delete("/auth/profile/photo");
+      await authApi.removePhoto();
       setPhotoFile(null);
       setPhotoPreview("");
       setProfile((p) => ({ ...p, profilePicture: null }));
@@ -250,7 +249,7 @@ const UserProfile = () => {
   useEffect(() => {
     if (profile?.userId) {
       loadSkills();
-      loadSocialCounts(); // ✅ fetch followers/following when we know who the user is
+      loadSocialCounts();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile?.userId]);
@@ -259,7 +258,7 @@ const UserProfile = () => {
   const loadProfile = async () => {
     try {
       setLoadingProfile(true);
-      const res = await api.get("/auth/profile");
+      const res = await authApi.getProfile();
       setProfile(res.data);
       setForm({
         fullName: res.data.fullName || "",
@@ -278,7 +277,7 @@ const UserProfile = () => {
   const loadTeaching = async () => {
     try {
       setLoadingTeach(true);
-      const res = await api.get("/requests/accepted");
+      const res = await requestsApi.listAcceptedByMe();
       setAcceptedRequests(res.data || []);
     } catch (err) {
       console.error("Accepted requests error:", err);
@@ -290,7 +289,7 @@ const UserProfile = () => {
   const loadLearning = async () => {
     try {
       setLoadingLearn(true);
-      const res = await api.get("/requests/accepted/requester");
+      const res = await requestsApi.listAcceptedAsRequester();
       setLearningRequests(res.data || []);
     } catch (err) {
       console.error("Learning requests error:", err);
@@ -303,7 +302,7 @@ const UserProfile = () => {
     if (!profile?.userId) return;
     try {
       setLoadingSkills(true);
-      const res = await api.get(`/skills/user/${profile.userId}`);
+      const res = await skillsApi.byUser(`${profile.userId}`);
       setSkills(res.data || []);
     } catch (err) {
       console.error("Skills load error:", err);
@@ -312,15 +311,12 @@ const UserProfile = () => {
     }
   };
 
-  // ✅ new: followers/following counts
   const loadSocialCounts = async () => {
     try {
       setLoadingSocial(true);
-      // /friends/my -> people I follow (following)
-      // /friends/followers -> people who follow me
       const [followingRes, followersRes] = await Promise.all([
-        api.get("/friends/my"),
-        api.get("/friends/followers"),
+        friendsApi.my(),
+        friendsApi.followers(),
       ]);
       setFollowingCount((followingRes.data || []).length);
       setFollowersCount((followersRes.data || []).length);
@@ -343,7 +339,7 @@ const UserProfile = () => {
     e.preventDefault();
     try {
       setSaving(true);
-      await api.put("/auth/profile", form);
+      await authApi.updateProfile(form);
       if (photoFile) await uploadProfilePhoto();
 
       setMessage("Profile updated successfully!");
@@ -363,10 +359,9 @@ const UserProfile = () => {
     if (!profile) return;
     try {
       setToggling(true);
-      const next = !profile.readyToTeach;
-      await api.put("/auth/teach-mode", { readyToTeach: next });
-      setProfile((p) => ({ ...p, readyToTeach: next }));
-      setMessage(next ? "Tutor mode enabled" : "Tutor mode disabled");
+      await authApi.setTeachMode(!profile.readyToTeach);
+      setProfile((p) => ({ ...p, readyToTeach: !profile.readyToTeach }));
+      setMessage(!profile.readyToTeach ? "Tutor mode enabled" : "Tutor mode disabled");
     } catch (err) {
       console.error("Tutor mode error:", err);
       setMessage("Failed to update Tutor mode");
@@ -386,8 +381,8 @@ const UserProfile = () => {
     if (!selectedRequest) return;
     try {
       setScheduling(true);
-      await api.post(
-        `/requests/accepted/${selectedRequest.acceptedRequestId}/schedule`,
+      await requestsApi.scheduleAccepted(
+        `${selectedRequest.acceptedRequestId}`,
         scheduleForm
       );
       setMessage("Meeting scheduled successfully!");
@@ -407,7 +402,7 @@ const UserProfile = () => {
     const confirmed = window.confirm("Remove this skill from your profile?");
     if (!confirmed) return;
     try {
-      await api.delete(`/skills/${profile.userId}/${skillId}`);
+      await skillsApi.remove(`${profile.userId}`,`${skillId}`);
       setMessage("Skill removed");
       setSkills((prev) => prev.filter((s) => s.skillId !== skillId));
     } catch (err) {
@@ -420,7 +415,7 @@ const UserProfile = () => {
   const deactivateAccount = async () => {
     try {
       setDeactivating(true);
-      await api.put("/auth/active", { isActive: false });
+      await authApi.setActive(false);
       setMessage("Your account has been deactivated.");
       setConfirmDeactivate(false);
       setTimeout(() => {
@@ -554,19 +549,20 @@ const UserProfile = () => {
                       Let others know you can teach
                     </div>
                   </div>
-                  <MacToggle checked={profile.readyToTeach} onChange={toggleTutorMode} disabled={toggling} />
+                  <MacToggle checked={profile.readyToTeach} onClick={toggleTutorMode} disabled={toggling} />
                 </div>
               )}
 
               <MacPrimary id="edit-profile-btn" data-testid="profile-edit-btn" onClick={() => setIsEditing(true)}>Edit Profile</MacPrimary>
 
               <div className="relative" ref={moreRef}>
-                <MacButton onClick={() => setMoreOpen((s) => !s)} title="More">•••</MacButton>
+                <MacButton onClick={() => setMoreOpen((s) => !s)} title="More" aria-haspopup="menu" aria-expanded={moreOpen}>•••</MacButton>
                 {moreOpen && (
                   <div className="absolute right-0 mt-2 w-52 rounded-2xl border border-white/40 dark:border-white/10 bg-white/70 dark:bg-ink-900/70 backdrop-blur-xl shadow p-1 z-20">
                     <button
                       onClick={() => { setMoreOpen(false); logout(); navigate("/login"); }}
                       className="w-full text-left px-3 py-2 rounded-xl hover:bg-black/5 dark:hover:bg-white/10 dark:text-white/35"
+                      role="menuitem"
                     >
                       Logout
                     </button>
@@ -574,6 +570,7 @@ const UserProfile = () => {
                     <button
                       onClick={() => { setMoreOpen(false); setConfirmDeactivate(true); }}
                       className="w-full text-left px-3 py-2 rounded-xl text-red-600 hover:bg-red-50/50 dark:hover:bg-red-400/10"
+                      role="menuitem"
                     >
                       Deactivate Account
                     </button>
@@ -586,11 +583,11 @@ const UserProfile = () => {
 
         {/* Tabs */}
         <div className="flex gap-2">
-          <MacButton className={tab === "overview" ? "bg-blue-600 text-black" : ""} onClick={() => setTab("overview")}>Overview</MacButton>
-          <MacButton className={tab === "teaching" ? "bg-blue-600 text-black" : ""} onClick={() => setTab("teaching")}>
+          <MacButton className={tab === "overview" ? "bg-black/10 dark:bg-white/10" : ""} onClick={() => setTab("overview")}>Overview</MacButton>
+          <MacButton className={tab === "teaching" ? "bg-black/10 dark:bg-white/10" : ""} onClick={() => setTab("teaching")}>
             Teaching <Chip className="ml-2 bg-black/5 dark:bg-white/10">{acceptedRequests.length}</Chip>
           </MacButton>
-          <MacButton className={tab === "learning" ? "bg-blue-600 text-black" : ""} onClick={() => setTab("learning")}>
+          <MacButton className={tab === "learning" ? "bg-black/10 dark:bg-white/10" : ""} onClick={() => setTab("learning")}>
             Learning <Chip className="ml-2 bg-black/5 dark:bg-white/10">{learningRequests.length}</Chip>
           </MacButton>
         </div>
@@ -762,7 +759,7 @@ const UserProfile = () => {
                     </div>
                   </div>
 
-                  {/* ✅ Following */}
+                  {/* Following */}
                   <div className="p-4 rounded-xl border border-black/10 dark:border-white/10 bg-white/100 dark:bg-ink-800/40">
                     <div className="text-sm text-slate-600 dark:text-slate-400">Following</div>
                     <div className="text-2xl font-semibold text-blue-600">
@@ -773,7 +770,7 @@ const UserProfile = () => {
                     </div>
                   </div>
 
-                  {/* ✅ Followers */}
+                  {/* Followers */}
                   <div className="p-4 rounded-xl border border-black/10 dark:border-white/10 bg-white/100 dark:bg-ink-800/40">
                     <div className="text-sm text-slate-600 dark:text-slate-400">Followers</div>
                     <div className="text-2xl font-semibold text-emerald-600">
@@ -816,6 +813,7 @@ const UserProfile = () => {
             <SectionCard
               title="My Skills"
               action={<MacButton onClick={() => navigate("/skill")} className="text-sm">Manage</MacButton>}
+              className=" pb-16"
             >
               {loadingSkills ? (
                 <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -840,7 +838,7 @@ const UserProfile = () => {
                           {s.level}
                         </span>
                       </div>
-                      <button className="text-red-600 hover:text-red-800" onClick={() => deleteSkill(s.skillId)} title="Remove skill">
+                      <button className="text-red-600 hover:text-red-800" onClick={() => deleteSkill(s.skillId)} title="Remove skill" aria-label="Remove skill">
                         <i className="fas fa-trash-alt"></i>
                       </button>
                     </div>

@@ -1,7 +1,14 @@
-import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import api from "../api/axios";
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useCallback,
+} from "react";
 import { useNavigate } from "react-router-dom";
 import Dock from "../components/Dock";
+import { useAuth } from "../context/AuthContext";
+import { adminApi } from "../api";
 
 /* ========================== Utilities ========================== */
 const debounce = (fn, ms = 400) => {
@@ -87,13 +94,13 @@ const MacButton = ({ children, className = "", ...props }) => (
   </button>
 );
 
-const MacDanger = (props) => (
+const MacDanger = ({ className = "", ...props }) => (
   <button
     {...props}
     className={
       "px-4 py-2 rounded-xl text-sm font-medium text-white " +
       "focus:outline-none focus:ring-2 focus:ring-red-400/40 " +
-      (props.className || "")
+      className
     }
   />
 );
@@ -218,13 +225,13 @@ const Donut = ({ segments = [], size = 140, stroke = 18 }) => {
 
 /* ========================== Page ========================== */
 const AdminDashboard = () => {
+  const navigate = useNavigate();
+  const { user: authUser, loading: authLoading } = useAuth();
+
   const [users, setUsers] = useState([]);
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("ALL"); // ALL | ACTIVE | INACTIVE | TUTORS | ADMINS
   const [loading, setLoading] = useState(true);
-
-  const navigate = useNavigate();
-
   const [toast, setToast] = useState({ kind: "info", message: "" });
 
   // selection
@@ -246,11 +253,21 @@ const AdminDashboard = () => {
   // delete loading state
   const [deletingId, setDeletingId] = useState(null);
 
-  // persist dark mode on refresh
+  // dark mode persist
   useEffect(() => {
     const t = localStorage.theme;
     if (t === "dark") document.documentElement.classList.add("dark");
   }, []);
+
+  // guard: only admins allowed
+  useEffect(() => {
+    if (!authLoading) {
+      const role = authUser?.role || authUser?.roles?.[0] || "";
+      if (!authUser || String(role).toUpperCase() !== "ADMIN") {
+        navigate("/home", { replace: true });
+      }
+    }
+  }, [authLoading, authUser, navigate]);
 
   const showToast = (kind, message) => {
     setToast({ kind, message });
@@ -263,8 +280,8 @@ const AdminDashboard = () => {
       try {
         setLoading(true);
         const query = (search || "").trim();
-        const url = `/admin/users${query ? `?q=${encodeURIComponent(query)}` : ""}`;
-        const res = await api.get(url);
+        const url = `${query ? `${encodeURIComponent(query)}` : ""}`;
+        const res = await adminApi.listUsers(url);
         setUsers(res.data || []);
         setPage(1);
         setChecked({});
@@ -356,7 +373,7 @@ const AdminDashboard = () => {
   const setActive = async (ids, isActive) => {
     try {
       await Promise.all(
-        ids.map((id) => api.put(`/admin/users/${id}/active`, { isActive }))
+        ids.map((id) => adminApi.setActive(id, isActive))
       );
       showToast("success", "Updated user status");
       setBulkOpen(false);
@@ -369,7 +386,7 @@ const AdminDashboard = () => {
 
   const setRole = async (ids, role) => {
     try {
-      await Promise.all(ids.map((id) => api.put(`/admin/users/${id}/role`, { role })));
+      await Promise.all(ids.map((id) => adminApi.setRole(`${id}`, `${role}`)));
       showToast("success", "Updated role");
       setBulkOpen(false);
       load();
@@ -445,7 +462,7 @@ const AdminDashboard = () => {
 
     try {
       setDeletingId(userId);
-      await api.delete(`/auth/users/${userId}`);
+      await adminApi.deleteUser(userId);
       showToast("success", "User deleted successfully");
       setActiveUser(null); // close drawer if open
       await load(); // reload user list
@@ -467,6 +484,14 @@ const AdminDashboard = () => {
       setDeletingId(null);
     }
   };
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-slate-600 dark:text-slate-300">
+        Loading…
+      </div>
+    );
+  }
 
   return (
     <div className="relative min-h-screen font-sans">
@@ -705,7 +730,7 @@ const AdminDashboard = () => {
             <thead>
               <tr className="bg-white/60 dark:bg-ink-800/60 text-left">
                 <th className="px-4 py-3">
-                  <input type="checkbox" checked={checkAll} onChange={onBulkToggle} />
+                  <input type="checkbox" checked={checkAll} onChange={onBulkToggle} aria-label="Select all on page" />
                 </th>
                 {headerCell("Name", "fullName")}
                 {headerCell("Email", "email")}
@@ -735,6 +760,7 @@ const AdminDashboard = () => {
                             [u.userId]: e.target.checked,
                           }))
                         }
+                        aria-label={`Select user ${u.fullName}`}
                       />
                     </td>
                     <td className="px-4 py-3">
@@ -751,6 +777,7 @@ const AdminDashboard = () => {
                         value={u.role}
                         onChange={(e) => setRole([u.userId], e.target.value)}
                         className="border border-slate-300 dark:border-slate-700 bg-white dark:bg-ink-800 text-slate-800 dark:text-slate-200 rounded px-2 py-1"
+                        aria-label={`Set role for ${u.fullName}`}
                       >
                         <option value="Learner">Learner</option>
                         <option value="Tutor">Tutor</option>
@@ -824,6 +851,7 @@ const AdminDashboard = () => {
                 <button
                   onClick={() => setActiveUser(null)}
                   className="text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+                  aria-label="Close"
                 >
                   ✕
                 </button>
@@ -899,6 +927,7 @@ const AdminDashboard = () => {
                   value={activeUser.role}
                   onChange={(e) => setRole([activeUser.userId], e.target.value)}
                   className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-ink-800 text-slate-800 dark:text-slate-200"
+                  aria-label="Set role"
                 >
                   <option value="Learner">Learner</option>
                   <option value="Tutor">Tutor</option>

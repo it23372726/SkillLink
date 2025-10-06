@@ -1,6 +1,7 @@
 import React, { useMemo, useRef, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import api from "../api/axios";
+import { authApi } from "../api";
+// import api from "../api/axios";
 
 // --- Apple/mac style UI helpers ---
 const GlassCard = ({ children, className = "" }) => (
@@ -154,7 +155,8 @@ const RegisterPage = () => {
     const newErrors = {};
     if (!formData.fullName.trim()) newErrors.fullName = "Full name is required";
     if (!formData.email.trim()) newErrors.email = "Email is required";
-    else if (!/\S+@\S+\.\S+/.test(formData.email)) newErrors.email = "Email is invalid";
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email))
+      newErrors.email = "Email is invalid";
     if (!formData.password) newErrors.password = "Password is required";
     else if (formData.password.length < 6)
       newErrors.password = "Password must be at least 6 characters";
@@ -175,19 +177,20 @@ const RegisterPage = () => {
       data.append("fullName", formData.fullName);
       data.append("email", formData.email);
       data.append("password", formData.password);
-      data.append("role", "Learner");
+      data.append("role", "Learner"); // default on register
       if (formData.profilePicture) {
         data.append("profilePicture", formData.profilePicture);
       }
-      const response = await api.post("/auth/register", data, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+      const response = await authApi.register(data);
       if (response.status === 200) {
         setMessage("Registration successful! Redirecting…");
-        setTimeout(() => navigate("/login"), 1500);
+        setTimeout(() => navigate("/login"), 1200);
+      } else {
+        setMessage("Registration failed. Please try again.");
       }
     } catch (err) {
       console.error("Registration error:", err);
+      console.error('Body:', err.response?.data);
       const apiMessage = err.response?.data?.message;
       if (err.response?.status === 409) setMessage(apiMessage || "Email already exists.");
       else if (err.response?.status === 400)
@@ -226,6 +229,7 @@ const RegisterPage = () => {
                   ? "bg-emerald-50 text-emerald-700"
                   : "bg-red-50 text-red-700"
               }`}
+              role="alert"
             >
               {message}
             </div>
@@ -332,11 +336,14 @@ const RegisterPage = () => {
                       errors.password ? "border-red-300" : "border-slate-300 dark:border-slate-700"
                     } rounded-lg bg-white dark:bg-ink-800 text-ink-900 dark:text-ink-100 pr-10`}
                     placeholder="At least 6 characters"
+                    minLength={6}
+                    required
                   />
                   <button
                     type="button"
                     onClick={() => setPwVisible((s) => !s)}
                     className="absolute inset-y-0 right-0 px-3 text-gray-500 dark:text-gray-400"
+                    aria-label={pwVisible ? "Hide password" : "Show password"}
                   >
                     {pwVisible ? <i className="fas fa-eye-slash"></i> : <i className="fas fa-eye"></i>}
                   </button>
@@ -375,11 +382,13 @@ const RegisterPage = () => {
                         : "border-slate-300 dark:border-slate-700"
                     } rounded-lg bg-white dark:bg-ink-800 text-ink-900 dark:text-ink-100 pr-10`}
                     placeholder="Retype your password"
+                    required
                   />
                   <button
                     type="button"
                     onClick={() => setCpwVisible((s) => !s)}
                     className="absolute inset-y-0 right-0 px-3 text-gray-500 dark:text-gray-400"
+                    aria-label={cpwVisible ? "Hide confirm password" : "Show confirm password"}
                   >
                     {cpwVisible ? <i className="fas fa-eye-slash"></i> : <i className="fas fa-eye"></i>}
                   </button>

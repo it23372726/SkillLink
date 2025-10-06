@@ -74,7 +74,8 @@ function Login() {
       } else {
         localStorage.removeItem("sl_saved_email");
       }
-      if (me?.role === "Admin") navigate("/admin-dashboard");
+      const role = (me?.role || me?.roles?.[0] || "").toString().toUpperCase();
+      if (role === "ADMIN") navigate("/admin-dashboard");
       else navigate("/dashboard");
     } catch (err) {
       console.error(err);
@@ -176,11 +177,13 @@ function Login() {
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-ink-800 text-ink-900 dark:text-ink-100 px-3 py-2 pr-10 focus:ring-2 focus:ring-blue-500"
                   placeholder="••••••••"
                   required
+                  minLength={6}
                 />
                 <button
                   type="button"
                   onClick={() => setPwVisible((s) => !s)}
                   className="absolute inset-y-0 right-0 px-3 text-gray-500 dark:text-gray-400"
+                  aria-label={pwVisible ? "Hide password" : "Show password"}
                 >
                   {pwVisible ? <i className="fas fa-eye-slash"></i> : <i className="fas fa-eye"></i>}
                 </button>
@@ -209,7 +212,7 @@ function Login() {
             <MacPrimary type="submit" disabled={isLoading}>
               {isLoading ? (
                 <>
-                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                  <span className="h-4 w-4 inline-block mr-2 align-[-2px] animate-spin rounded-full border-2 border-white border-t-transparent" />
                   Signing in…
                 </>
               ) : (
