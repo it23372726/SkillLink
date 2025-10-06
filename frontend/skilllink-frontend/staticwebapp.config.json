@@ -1,0 +1,17 @@
+{
+    "navigationFallback": {
+      "rewrite": "/index.html",
+      "exclude": [
+        "/assets/*",
+        "/static/*",
+        "/favicon.ico",
+        "/manifest.json",
+        "/robots.txt",
+        "/api/*"
+      ]
+    },
+    "responseOverrides": {
+      "404": { "rewrite": "/index.html" }
+    }
+  }
+  
