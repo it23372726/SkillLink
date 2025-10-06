@@ -1,120 +1,37 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Threading.Tasks;
 using FluentAssertions;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
-using MySql.Data.MySqlClient;
 using NUnit.Framework;
+using SkillLink.API.Data;
 using SkillLink.API.Models;
+using SkillLink.API.Repositories;
 using SkillLink.API.Services;
+using SkillLink.Tests.Db;
 
 namespace SkillLink.Tests.Services
 {
     [TestFixture]
     public class SkillServiceDbTests
     {
-        private Testcontainers.MySql.MySqlContainer _mysql = null!;
-        private bool _ownsContainer = false;
-        private string? _externalConnStr = null;
-
         private IConfiguration _config = null!;
         private DbHelper _dbHelper = null!;
         private SkillService _sut = null!;
         private AuthService _auth = null!;
+        private string _connStr = null!;
 
         [OneTimeSetUp]
         public async Task OneTimeSetup()
         {
-            // Allow external DB via env var to avoid Docker on some machines
-            var external = Environment.GetEnvironmentVariable("SKILLLINK_TEST_MYSQL");
-            if (!string.IsNullOrWhiteSpace(external))
-            {
-                _externalConnStr = external;
-            }
+            _connStr = await TestDbUtil.EnsureTestDbAsync();
 
-            // Detect Docker availability
-            var dockerHost = Environment.GetEnvironmentVariable("DOCKER_HOST");
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            var sock1 = "/var/run/docker.sock";
-            var sock2 = Path.Combine(home, ".docker/run/docker.sock");
-            var dockerSocketExists = File.Exists(sock1) || File.Exists(sock2);
-            if (!(_externalConnStr != null || dockerSocketExists || !string.IsNullOrEmpty(dockerHost)))
-            {
-                Assert.Ignore("Docker not available. Skipping SkillService DB integration tests.");
-                return;
-            }
-
-            if (_externalConnStr == null)
-            {
-                try
-                {
-                    _mysql = new Testcontainers.MySql.MySqlBuilder()
-                        .WithImage("mysql:8.0")
-                        .WithDatabase("skilllink_test")
-                        .WithUsername("testuser")
-                        .WithPassword("testpass")
-                        .Build();
-
-                    await _mysql.StartAsync();
-                    _ownsContainer = true;
-                }
-                catch (Exception ex)
-                {
-                    Assert.Ignore($"Docker not available or failed to start MySQL container. Skipping DB tests. Details: {ex.Message}");
-                    return;
-                }
-            }
-
-            var connStr = _externalConnStr ?? _mysql.GetConnectionString();
-
-            // Create schema
-            await using (var conn = new MySqlConnection(connStr))
-            {
-                await conn.OpenAsync();
-                var sql = @"
-                    CREATE TABLE IF NOT EXISTS Users (
-                      UserId INT AUTO_INCREMENT PRIMARY KEY,
-                      FullName VARCHAR(255) NOT NULL,
-                      Email VARCHAR(255) NOT NULL UNIQUE,
-                      PasswordHash VARCHAR(255) NULL,
-                      Role VARCHAR(50) NOT NULL DEFAULT 'Learner',
-                      CreatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                      Bio TEXT NULL,
-                      Location VARCHAR(255) NULL,
-                      ProfilePicture VARCHAR(512) NULL,
-                      ReadyToTeach TINYINT(1) NOT NULL DEFAULT 0,
-                      IsActive TINYINT(1) NOT NULL DEFAULT 1,
-                      EmailVerified TINYINT(1) NOT NULL DEFAULT 1
-                    );
-
-                    CREATE TABLE IF NOT EXISTS Skills (
-                      SkillId INT AUTO_INCREMENT PRIMARY KEY,
-                      Name VARCHAR(255) NOT NULL UNIQUE,
-                      IsPredefined TINYINT(1) NOT NULL DEFAULT 0
-                    );
-
-                    CREATE TABLE IF NOT EXISTS UserSkills (
-                      UserSkillId INT AUTO_INCREMENT PRIMARY KEY,
-                      UserId INT NOT NULL,
-                      SkillId INT NOT NULL,
-                      Level VARCHAR(50) NOT NULL,
-                      UNIQUE KEY uk_user_skill (UserId, SkillId),
-                      FOREIGN KEY (UserId) REFERENCES Users(UserId) ON DELETE CASCADE,
-                      FOREIGN KEY (SkillId) REFERENCES Skills(SkillId) ON DELETE CASCADE
-                    );
-                ";
-                await using var cmd = new MySqlCommand(sql, conn);
-                await cmd.ExecuteNonQueryAsync();
-            }
-
-            // Minimal config for AuthService constructor
             _config = new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {
-                    { "ConnectionStrings:DefaultConnection", connStr },
-                    // Jwt settings not needed for GetUserById, but AuthService ctor uses IConfiguration
-                    { "Jwt:Key", "x".PadLeft(32,'x') }, 
+                    { "ConnectionStrings:DefaultConnection", _connStr },
+                    { "Jwt:Key", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }, // 32+ chars
                     { "Jwt:Issuer", "SkillLink" },
                     { "Jwt:Audience", "SkillLink" },
                     { "Jwt:ExpireMinutes", "60" }
@@ -123,51 +40,46 @@ namespace SkillLink.Tests.Services
 
             _dbHelper = new DbHelper(_config);
 
-            // EmailService not needed for these tests, but AuthService requires it
-            var dummyEmail = new EmailService(_config);
-            _auth = new AuthService(_dbHelper, _config, dummyEmail);
+            var email = new EmailService(_config);
+            var authRepo = new AuthRepository(_dbHelper);
+            _auth = new AuthService(_config, email, authRepo);
 
-            _sut = new SkillService(_dbHelper, _auth);
+            var skillRepo = new SkillRepository(_dbHelper);
+            _sut = new SkillService(skillRepo, _auth);
         }
 
         [OneTimeTearDown]
-        public async Task OneTimeTeardown()
-        {
-            if (_ownsContainer && _mysql != null)
-            {
-                await _mysql.DisposeAsync();
-            }
-        }
+        public async Task OneTimeTeardown() => await TestDbUtil.DisposeAsync();
 
         [SetUp]
         public async Task Setup()
         {
-            // Clean tables
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
             var sql = @"
-                DELETE FROM UserSkills;
-                DELETE FROM Skills;
-                DELETE FROM Users;
-                ALTER TABLE UserSkills AUTO_INCREMENT = 1;
-                ALTER TABLE Skills AUTO_INCREMENT = 1;
-                ALTER TABLE Users AUTO_INCREMENT = 1;";
-            await using var cmd = new MySqlCommand(sql, conn);
-            await cmd.ExecuteNonQueryAsync();
+DELETE FROM dbo.UserSkills;
+DELETE FROM dbo.Skills;
+DELETE FROM dbo.Users;
 
-            // Seed a user
-            await using var ins = new MySqlCommand("INSERT INTO Users(FullName, Email) VALUES ('Alice','alice@example.com')", conn);
-            await ins.ExecuteNonQueryAsync();
+IF EXISTS (SELECT 1 FROM sys.identity_columns WHERE [object_id] = OBJECT_ID('dbo.UserSkills'))
+    DBCC CHECKIDENT('dbo.UserSkills', RESEED, 0);
+IF EXISTS (SELECT 1 FROM sys.identity_columns WHERE [object_id] = OBJECT_ID('dbo.Skills'))
+    DBCC CHECKIDENT('dbo.Skills', RESEED, 0);
+IF EXISTS (SELECT 1 FROM sys.identity_columns WHERE [object_id] = OBJECT_ID('dbo.Users'))
+    DBCC CHECKIDENT('dbo.Users', RESEED, 0);
+
+INSERT INTO dbo.Users (FullName, Email) VALUES ('Alice','alice@example.com');";
+            await using var cmd = new SqlCommand(sql, conn);
+            await cmd.ExecuteNonQueryAsync();
         }
 
         private async Task<int> GetUserIdByEmail(string email)
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
-            await using var cmd = new MySqlCommand("SELECT UserId FROM Users WHERE Email=@e", conn);
+            var cmd = new SqlCommand("SELECT UserId FROM dbo.Users WHERE Email=@e", conn);
             cmd.Parameters.AddWithValue("@e", email);
-            var obj = await cmd.ExecuteScalarAsync();
-            return Convert.ToInt32(obj);
+            return Convert.ToInt32(await cmd.ExecuteScalarAsync());
         }
 
         [Test]
@@ -175,10 +87,7 @@ namespace SkillLink.Tests.Services
         {
             var uid = await GetUserIdByEmail("alice@example.com");
 
-            // First add
             _sut.AddSkill(new AddSkillRequest { UserId = uid, SkillName = "React", Level = "Beginner" });
-
-            // Second add (same skill), should upsert Level
             _sut.AddSkill(new AddSkillRequest { UserId = uid, SkillName = "React", Level = "Advanced" });
 
             var list = _sut.GetUserSkills(uid);
@@ -199,7 +108,6 @@ namespace SkillLink.Tests.Services
             var skillId = skills[0].Skill!.SkillId;
 
             _sut.DeleteUserSkill(uid, skillId);
-
             _sut.GetUserSkills(uid).Should().BeEmpty();
         }
 

@@ -1,157 +1,84 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Threading.Tasks;
 using FluentAssertions;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
-using MySql.Data.MySqlClient;
 using NUnit.Framework;
+using SkillLink.API.Data;
 using SkillLink.API.Models;
+using SkillLink.API.Repositories;
 using SkillLink.API.Services;
+using SkillLink.Tests.Db;
 
 namespace SkillLink.Tests.Services
 {
     [TestFixture]
     public class TutorPostServiceDbTests
     {
-        private Testcontainers.MySql.MySqlContainer _mysql = null!;
-        private bool _ownsContainer = false;
-        private string? _externalConnStr = null;
         private IConfiguration _config = null!;
         private DbHelper _dbHelper = null!;
         private TutorPostService _sut = null!;
+        private string _connStr = null!;
 
         [OneTimeSetUp]
         public async Task OneTimeSetup()
         {
-            var external = Environment.GetEnvironmentVariable("SKILLLINK_TEST_MYSQL");
-            if (!string.IsNullOrWhiteSpace(external))
-            {
-                _externalConnStr = external;
-            }
-
-            var dockerHost = Environment.GetEnvironmentVariable("DOCKER_HOST");
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            var sock1 = "/var/run/docker.sock";
-            var sock2 = Path.Combine(home, ".docker/run/docker.sock");
-            var dockerSocketExists = File.Exists(sock1) || File.Exists(sock2);
-
-            if (!(_externalConnStr != null || dockerSocketExists || !string.IsNullOrEmpty(dockerHost)))
-            {
-                Assert.Ignore("Docker not available. Skipping TutorPostService DB integration tests.");
-                return;
-            }
-
-            if (_externalConnStr == null)
-            {
-                try
-                {
-                    _mysql = new Testcontainers.MySql.MySqlBuilder()
-                        .WithImage("mysql:8.0")
-                        .WithDatabase("skilllink_test")
-                        .WithUsername("testuser")
-                        .WithPassword("testpass")
-                        .Build();
-
-                    await _mysql.StartAsync();
-                    _ownsContainer = true;
-                }
-                catch (Exception ex)
-                {
-                    Assert.Ignore($"Docker not available or failed to start MySQL container. Skipping DB tests. Details: {ex.Message}");
-                    return;
-                }
-            }
-
-            var connStr = _externalConnStr ?? _mysql.GetConnectionString();
-
-            // Create minimal schema
-            await using (var conn = new MySqlConnection(connStr))
-            {
-                await conn.OpenAsync();
-                var sql = @"
-                CREATE TABLE IF NOT EXISTS Users (
-                  UserId INT AUTO_INCREMENT PRIMARY KEY,
-                  FullName VARCHAR(255) NOT NULL,
-                  Email VARCHAR(255) NOT NULL UNIQUE
-                );
-
-                CREATE TABLE IF NOT EXISTS TutorPosts (
-                  PostId INT AUTO_INCREMENT PRIMARY KEY,
-                  TutorId INT NOT NULL,
-                  Title VARCHAR(255) NOT NULL,
-                  Description TEXT NULL,
-                  MaxParticipants INT NOT NULL,
-                  Status VARCHAR(50) NOT NULL DEFAULT 'Open',
-                  CreatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                  ScheduledAt DATETIME NULL,
-                  ImageUrl VARCHAR(1024) NULL,
-                  FOREIGN KEY (TutorId) REFERENCES Users(UserId)
-                );
-
-                CREATE TABLE IF NOT EXISTS TutorPostParticipants (
-                  ParticipantId INT AUTO_INCREMENT PRIMARY KEY,
-                  PostId INT NOT NULL,
-                  UserId INT NOT NULL,
-                  AcceptedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                  FOREIGN KEY (PostId) REFERENCES TutorPosts(PostId),
-                  FOREIGN KEY (UserId) REFERENCES Users(UserId),
-                  UNIQUE KEY uq_post_user (PostId, UserId)
-                );";
-
-                await using var cmd = new MySqlCommand(sql, conn);
-                await cmd.ExecuteNonQueryAsync();
-            }
+            _connStr = await TestDbUtil.EnsureTestDbAsync();
 
             _config = new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {
-                    { "ConnectionStrings:DefaultConnection", connStr }
+                    { "ConnectionStrings:DefaultConnection", _connStr }
                 })
                 .Build();
 
             _dbHelper = new DbHelper(_config);
-            _sut = new TutorPostService(_dbHelper);
+
+            var repo = new TutorPostRepository(_dbHelper);
+            _sut = new TutorPostService(repo);
         }
 
         [OneTimeTearDown]
-        public async Task OneTimeTeardown()
-        {
-            if (_ownsContainer && _mysql != null)
-            {
-                await _mysql.DisposeAsync();
-            }
-        }
+        public async Task OneTimeTeardown() => await TestDbUtil.DisposeAsync();
 
         [SetUp]
         public async Task Setup()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
+
             var sql = @"
-                DELETE FROM TutorPostParticipants;
-                DELETE FROM TutorPosts;
-                DELETE FROM Users;
-                ALTER TABLE TutorPostParticipants AUTO_INCREMENT = 1;
-                ALTER TABLE TutorPosts AUTO_INCREMENT = 1;
-                ALTER TABLE Users AUTO_INCREMENT = 1;";
-            await using var cmd = new MySqlCommand(sql, conn);
+DELETE FROM dbo.TutorPostParticipants;
+DELETE FROM dbo.TutorPosts;
+DELETE FROM dbo.Users;
+
+IF EXISTS (SELECT 1 FROM sys.identity_columns WHERE [object_id] = OBJECT_ID('dbo.TutorPostParticipants'))
+    DBCC CHECKIDENT('dbo.TutorPostParticipants', RESEED, 0);
+IF EXISTS (SELECT 1 FROM sys.identity_columns WHERE [object_id] = OBJECT_ID('dbo.TutorPosts'))
+    DBCC CHECKIDENT('dbo.TutorPosts', RESEED, 0);
+IF EXISTS (SELECT 1 FROM sys.identity_columns WHERE [object_id] = OBJECT_ID('dbo.Users'))
+    DBCC CHECKIDENT('dbo.Users', RESEED, 0);";
+            await using var cmd = new SqlCommand(sql, conn);
             await cmd.ExecuteNonQueryAsync();
         }
 
-        private async Task<int> InsertUserAsync(MySqlConnection conn, string name, string email)
+        private async Task<int> InsertUserAsync(SqlConnection conn, string name, string email)
         {
-            var cmd = new MySqlCommand("INSERT INTO Users (FullName, Email) VALUES (@n, @e); SELECT LAST_INSERT_ID();", conn);
+            var cmd = new SqlCommand(@"
+INSERT INTO dbo.Users (FullName, Email) VALUES (@n, @e);
+SELECT CAST(SCOPE_IDENTITY() AS INT);", conn);
             cmd.Parameters.AddWithValue("@n", name);
             cmd.Parameters.AddWithValue("@e", email);
             return Convert.ToInt32(await cmd.ExecuteScalarAsync());
         }
 
-        private async Task<int> InsertPostAsync(MySqlConnection conn, int tutorId, string title, int max = 2, string status = "Open")
+        private async Task<int> InsertPostAsync(SqlConnection conn, int tutorId, string title, int max = 2, string status = "Open")
         {
-            var cmd = new MySqlCommand(@"
-                INSERT INTO TutorPosts (TutorId, Title, Description, MaxParticipants, Status)
-                VALUES (@t, @ti, '', @m, @st); SELECT LAST_INSERT_ID();", conn);
+            var cmd = new SqlCommand(@"
+INSERT INTO dbo.TutorPosts (TutorId, Title, Description, MaxParticipants, Status)
+VALUES (@t, @ti, '', @m, @st);
+SELECT CAST(SCOPE_IDENTITY() AS INT);", conn);
             cmd.Parameters.AddWithValue("@t", tutorId);
             cmd.Parameters.AddWithValue("@ti", title);
             cmd.Parameters.AddWithValue("@m", max);
@@ -162,7 +89,7 @@ namespace SkillLink.Tests.Services
         [Test]
         public async Task CreatePost_Then_GetById_ShouldReturnInserted()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
 
             var tutorId = await InsertUserAsync(conn, "Tutor X", "tx@example.com");
@@ -187,14 +114,14 @@ namespace SkillLink.Tests.Services
         [Test]
         public async Task GetPosts_ShouldInclude_CurrentParticipants_AndTutor()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
 
             var t1 = await InsertUserAsync(conn, "Tutor A", "a@example.com");
             var u2 = await InsertUserAsync(conn, "User B", "b@example.com");
 
             var p1 = await InsertPostAsync(conn, t1, "Post A", max: 2, status: "Open");
-            var ins = new MySqlCommand("INSERT INTO TutorPostParticipants (PostId, UserId) VALUES (@p,@u)", conn);
+            var ins = new SqlCommand("INSERT INTO dbo.TutorPostParticipants (PostId, UserId) VALUES (@p,@u)", conn);
             ins.Parameters.AddWithValue("@p", p1);
             ins.Parameters.AddWithValue("@u", u2);
             await ins.ExecuteNonQueryAsync();
@@ -209,7 +136,7 @@ namespace SkillLink.Tests.Services
         [Test]
         public async Task AcceptPost_ShouldInsert_And_CloseWhenFull()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
 
             var tutor = await InsertUserAsync(conn, "Tutor", "t@example.com");
@@ -218,7 +145,7 @@ namespace SkillLink.Tests.Services
             var postId = await InsertPostAsync(conn, tutor, "Small class", max: 2);
 
             _sut.AcceptPost(postId, u1);
-            _sut.AcceptPost(postId, u2); // fills capacity → should close
+            _sut.AcceptPost(postId, u2); // fills → closes
 
             var refreshed = _sut.GetById(postId)!;
             refreshed.CurrentParticipants.Should().Be(2);
@@ -228,7 +155,7 @@ namespace SkillLink.Tests.Services
         [Test]
         public async Task AcceptPost_ShouldReject_Duplicate_Self_Full_Closed_Scheduled()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
 
             var tutor = await InsertUserAsync(conn, "Tutor", "t@example.com");
@@ -266,7 +193,7 @@ namespace SkillLink.Tests.Services
         [Test]
         public async Task Schedule_ShouldUpdate_Status_AndDate()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
 
             var tutor = await InsertUserAsync(conn, "Tutor", "t@example.com");
@@ -283,7 +210,7 @@ namespace SkillLink.Tests.Services
         [Test]
         public async Task UpdatePost_ShouldEnforceOwner_And_MaxParticipantsConstraint()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
 
             var tutor = await InsertUserAsync(conn, "Tutor", "t@example.com");
@@ -296,8 +223,8 @@ namespace SkillLink.Tests.Services
             FluentActions.Invoking(() => _sut.UpdatePost(pid, other, dto))
                 .Should().Throw<UnauthorizedAccessException>();
 
-            // Ensure constraint: if current participants > new MaxParticipants → throw
-            var accept = new MySqlCommand("INSERT INTO TutorPostParticipants (PostId, UserId) VALUES (@p,@u)", conn);
+            // participants > new max → invalid
+            var accept = new SqlCommand("INSERT INTO dbo.TutorPostParticipants (PostId, UserId) VALUES (@p,@u)", conn);
             accept.Parameters.AddWithValue("@p", pid);
             accept.Parameters.AddWithValue("@u", learner);
             await accept.ExecuteNonQueryAsync();
@@ -317,26 +244,24 @@ namespace SkillLink.Tests.Services
         [Test]
         public async Task DeletePost_ShouldEnforceOwnerOnly()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
 
             var tutor = await InsertUserAsync(conn, "Tutor", "t@example.com");
             var other = await InsertUserAsync(conn, "Other", "o@example.com");
-
             var pid = await InsertPostAsync(conn, tutor, "Del", max: 1, status: "Open");
 
             FluentActions.Invoking(() => _sut.DeletePost(pid, other))
                 .Should().Throw<UnauthorizedAccessException>();
 
             _sut.DeletePost(pid, tutor);
-            var gone = _sut.GetById(pid);
-            gone.Should().BeNull();
+            _sut.GetById(pid).Should().BeNull();
         }
 
         [Test]
         public async Task SetImageUrl_ShouldPersistValue()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
 
             var tutor = await InsertUserAsync(conn, "Tutor", "t@example.com");
