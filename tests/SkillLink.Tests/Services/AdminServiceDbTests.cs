@@ -1,142 +1,67 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Threading.Tasks;
 using FluentAssertions;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
-using MySql.Data.MySqlClient;
 using NUnit.Framework;
+using SkillLink.API.Data;
+using SkillLink.API.Repositories;
 using SkillLink.API.Services;
-
-using SkillLink.API.Models;
+using SkillLink.Tests.Db;
 
 namespace SkillLink.Tests.Services
 {
     [TestFixture]
     public class AdminServiceDbTests
     {
-        private Testcontainers.MySql.MySqlContainer _mysql = null!;
-        private bool _ownsContainer = false;
-        private string? _externalConnStr = null;
-
         private IConfiguration _config = null!;
         private DbHelper _db = null!;
         private AdminService _sut = null!;
+        private string _connStr = null!;
 
         [OneTimeSetUp]
         public async Task OneTimeSetup()
         {
-            // Allow using external MySQL for CI or local dev
-            var external = Environment.GetEnvironmentVariable("SKILLLINK_TEST_MYSQL");
-            if (!string.IsNullOrWhiteSpace(external))
-            {
-                _externalConnStr = external;
-            }
-
-            // Docker detection
-            var dockerHost = Environment.GetEnvironmentVariable("DOCKER_HOST");
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            var sock1 = "/var/run/docker.sock";
-            var sock2 = Path.Combine(home, ".docker/run/docker.sock");
-            var dockerSocketExists = File.Exists(sock1) || File.Exists(sock2);
-
-            if (!(_externalConnStr != null || dockerSocketExists || !string.IsNullOrEmpty(dockerHost)))
-            {
-                Assert.Ignore("Docker not available. Skipping AdminService DB integration tests.");
-                return;
-            }
-
-            if (_externalConnStr == null)
-            {
-                try
-                {
-                    _mysql = new Testcontainers.MySql.MySqlBuilder()
-                        .WithImage("mysql:8.0")
-                        .WithDatabase("skilllink_test_admin")
-                        .WithUsername("testuser")
-                        .WithPassword("testpass")
-                        .Build();
-
-                    await _mysql.StartAsync();
-                    _ownsContainer = true;
-                }
-                catch (Exception ex)
-                {
-                    Assert.Ignore($"Docker not available or failed to start MySQL container. Skipping DB tests. Details: {ex.Message}");
-                    return;
-                }
-            }
-
-            var connStr = _externalConnStr ?? _mysql.GetConnectionString();
-
-            // Create Users table schema (only fields used by AdminService)
-            await using (var conn = new MySqlConnection(connStr))
-            {
-                await conn.OpenAsync();
-                var sql = @"
-                    CREATE TABLE IF NOT EXISTS Users (
-                      UserId INT AUTO_INCREMENT PRIMARY KEY,
-                      FullName VARCHAR(255) NOT NULL,
-                      Email VARCHAR(255) NOT NULL UNIQUE,
-                      PasswordHash VARCHAR(255) NULL,
-                      Role VARCHAR(50) NOT NULL DEFAULT 'Learner',
-                      CreatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                      Bio TEXT NULL,
-                      Location VARCHAR(255) NULL,
-                      ProfilePicture VARCHAR(512) NULL,
-                      ReadyToTeach TINYINT(1) NOT NULL DEFAULT 0,
-                      IsActive TINYINT(1) NOT NULL DEFAULT 1,
-                      EmailVerified TINYINT(1) NOT NULL DEFAULT 0,
-                      EmailVerificationToken VARCHAR(255) NULL,
-                      EmailVerificationExpires DATETIME NULL
-                    );
-                ";
-                await using var cmd = new MySqlCommand(sql, conn);
-                await cmd.ExecuteNonQueryAsync();
-            }
-
+            _connStr = await TestDbUtil.EnsureTestDbAsync();
             _config = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string?>
+                .AddInMemoryCollection(new[]
                 {
-                    { "ConnectionStrings:DefaultConnection", connStr }
+                    new KeyValuePair<string,string?>("ConnectionStrings:DefaultConnection", _connStr)
                 })
                 .Build();
 
             _db = new DbHelper(_config);
-            _sut = new AdminService(_db);
+            _sut = new AdminService(new AdminRepository(_db));
         }
 
         [OneTimeTearDown]
-        public async Task OneTimeTeardown()
-        {
-            if (_ownsContainer && _mysql != null)
-            {
-                await _mysql.DisposeAsync();
-            }
-        }
+        public async Task OneTimeTeardown() => await TestDbUtil.DisposeAsync();
 
         [SetUp]
         public async Task Setup()
         {
-            // Clean Users table before each test
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
-            var sql = @"DELETE FROM Users; ALTER TABLE Users AUTO_INCREMENT = 1;";
-            await using var cmd = new MySqlCommand(sql, conn);
+            var sql = @"
+DELETE FROM dbo.Users; 
+IF EXISTS (SELECT 1 FROM sys.identity_columns WHERE [object_id] = OBJECT_ID('dbo.Users'))
+    DBCC CHECKIDENT('dbo.Users', RESEED, 0);";
+            await using var cmd = new SqlCommand(sql, conn);
             await cmd.ExecuteNonQueryAsync();
         }
 
-        private async Task<int> InsertUserAsync(MySqlConnection conn, string name, string email, string role = "Learner", bool isActive = true, bool readyToTeach = false)
+        private async Task<int> InsertUserAsync(SqlConnection conn, string name, string email, string role = "Learner", bool isActive = true, bool readyToTeach = false)
         {
-            var cmd = new MySqlCommand(@"
-                INSERT INTO Users (FullName, Email, Role, IsActive, ReadyToTeach, EmailVerified, CreatedAt)
-                VALUES (@n, @e, @r, @a, @t, 1, NOW());
-                SELECT LAST_INSERT_ID();", conn);
+            var cmd = new SqlCommand(@"
+INSERT INTO dbo.Users (FullName, Email, PasswordHash, Role, CreatedAt, IsActive, ReadyToTeach, EmailVerified)
+VALUES (@n, @e, 'x', @r, SYSUTCDATETIME(), @a, @t, 1);
+SELECT CAST(SCOPE_IDENTITY() AS INT);", conn);
             cmd.Parameters.AddWithValue("@n", name);
             cmd.Parameters.AddWithValue("@e", email);
             cmd.Parameters.AddWithValue("@r", role);
-            cmd.Parameters.AddWithValue("@a", isActive ? 1 : 0);
-            cmd.Parameters.AddWithValue("@t", readyToTeach ? 1 : 0);
+            cmd.Parameters.AddWithValue("@a", isActive);
+            cmd.Parameters.AddWithValue("@t", readyToTeach);
             var idObj = await cmd.ExecuteScalarAsync();
             return Convert.ToInt32(idObj);
         }
@@ -144,7 +69,7 @@ namespace SkillLink.Tests.Services
         [Test]
         public async Task GetUsers_ShouldReturn_All_And_FilterBySearch()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
 
             await InsertUserAsync(conn, "Alice Test", "alice@example.com", "Learner");
@@ -161,25 +86,24 @@ namespace SkillLink.Tests.Services
         [Test]
         public async Task SetUserActive_ShouldUpdate()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
 
-            var id = await InsertUserAsync(conn, "Cara", "cara@example.com", "Learner", isActive:true);
+            var id = await InsertUserAsync(conn, "Cara", "cara@example.com", "Learner", isActive: true);
 
             var ok = _sut.SetUserActive(id, false);
             ok.Should().BeTrue();
 
-            // verify from DB
-            var check = new MySqlCommand("SELECT IsActive FROM Users WHERE UserId=@id", conn);
+            var check = new SqlCommand("SELECT IsActive FROM dbo.Users WHERE UserId=@id", conn);
             check.Parameters.AddWithValue("@id", id);
-            var isActive = Convert.ToInt32(await check.ExecuteScalarAsync());
+            var isActive = Convert.ToInt32((bool)(await check.ExecuteScalarAsync() ?? false));
             isActive.Should().Be(0);
         }
 
         [Test]
         public async Task SetUserRole_ShouldUpdate()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
 
             var id = await InsertUserAsync(conn, "Drew", "drew@example.com", "Learner");
@@ -187,7 +111,7 @@ namespace SkillLink.Tests.Services
             var ok = _sut.SetUserRole(id, "Tutor");
             ok.Should().BeTrue();
 
-            var check = new MySqlCommand("SELECT Role FROM Users WHERE UserId=@id", conn);
+            var check = new SqlCommand("SELECT Role FROM dbo.Users WHERE UserId=@id", conn);
             check.Parameters.AddWithValue("@id", id);
             var role = (string)(await check.ExecuteScalarAsync() ?? "");
             role.Should().Be("Tutor");

@@ -1,203 +1,118 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Threading.Tasks;
 using FluentAssertions;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
-using MySql.Data.MySqlClient;
 using NUnit.Framework;
-using SkillLink.API.Models;
 using SkillLink.API.Services;
+using SkillLink.API.Data;
+using SkillLink.API.Repositories;
+using SkillLink.Tests.Db;
 
 namespace SkillLink.Tests.Services
 {
     [TestFixture]
     public class FeedServiceDbTests
     {
-        private Testcontainers.MySql.MySqlContainer _mysql = null!;
-        private bool _ownsContainer = false;
-        private string? _externalConnStr = null;
         private IConfiguration _config = null!;
         private DbHelper _dbHelper = null!;
         private FeedService _feed = null!;
         private ReactionService _reactions = null!;
         private CommentService _comments = null!;
+        private string _connStr = null!;
 
         [OneTimeSetUp]
         public async Task OneTimeSetup()
         {
-            var external = Environment.GetEnvironmentVariable("SKILLLINK_TEST_MYSQL");
-            if (!string.IsNullOrWhiteSpace(external)) _externalConnStr = external;
-
-            var dockerHost = Environment.GetEnvironmentVariable("DOCKER_HOST");
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            var sock1 = "/var/run/docker.sock";
-            var sock2 = Path.Combine(home, ".docker/run/docker.sock");
-            var dockerSocketExists = File.Exists(sock1) || File.Exists(sock2);
-            if (!(_externalConnStr != null || dockerSocketExists || !string.IsNullOrEmpty(dockerHost)))
-            {
-                Assert.Ignore("Docker not available. Skipping FeedService DB integration tests.");
-                return;
-            }
-
-            if (_externalConnStr == null)
-            {
-                try
-                {
-                    _mysql = new Testcontainers.MySql.MySqlBuilder()
-                        .WithImage("mysql:8.0")
-                        .WithDatabase("skilllink_test")
-                        .WithUsername("testuser")
-                        .WithPassword("testpass")
-                        .Build();
-                    await _mysql.StartAsync();
-                    _ownsContainer = true;
-                }
-                catch (Exception ex)
-                {
-                    Assert.Ignore($"Docker not available or failed to start MySQL container. Skipping DB tests. Details: {ex.Message}");
-                    return;
-                }
-            }
-
-            var connStr = _externalConnStr ?? _mysql.GetConnectionString();
-
-            await using (var conn = new MySqlConnection(connStr))
-            {
-                await conn.OpenAsync();
-                var sql = @"
-                CREATE TABLE IF NOT EXISTS Users (
-                  UserId INT AUTO_INCREMENT PRIMARY KEY,
-                  FullName VARCHAR(255) NOT NULL,
-                  Email VARCHAR(255) NOT NULL UNIQUE,
-                  ProfilePicture VARCHAR(1024) NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS TutorPosts (
-                  PostId INT AUTO_INCREMENT PRIMARY KEY,
-                  TutorId INT NOT NULL,
-                  Title VARCHAR(255) NOT NULL,
-                  Description TEXT NULL,
-                  MaxParticipants INT NOT NULL DEFAULT 1,
-                  Status VARCHAR(50) NOT NULL DEFAULT 'Open',
-                  CreatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                  ScheduledAt DATETIME NULL,
-                  ImageUrl VARCHAR(1024) NULL,
-                  FOREIGN KEY (TutorId) REFERENCES Users(UserId)
-                );
-
-                CREATE TABLE IF NOT EXISTS Requests (
-                  RequestId INT AUTO_INCREMENT PRIMARY KEY,
-                  LearnerId INT NOT NULL,
-                  SkillName VARCHAR(255) NOT NULL,
-                  Topic TEXT NULL,
-                  Description TEXT NULL,
-                  Status VARCHAR(50) NOT NULL DEFAULT 'OPEN',
-                  CreatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                  FOREIGN KEY (LearnerId) REFERENCES Users(UserId)
-                );
-
-                CREATE TABLE IF NOT EXISTS PostReactions (
-                  Id INT AUTO_INCREMENT PRIMARY KEY,
-                  PostType VARCHAR(20) NOT NULL,
-                  PostId INT NOT NULL,
-                  UserId INT NOT NULL,
-                  Reaction VARCHAR(10) NOT NULL,
-                  CreatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                  UNIQUE KEY uq_react (PostType, PostId, UserId)
-                );
-
-                CREATE TABLE IF NOT EXISTS PostComments (
-                  CommentId INT AUTO_INCREMENT PRIMARY KEY,
-                  PostType VARCHAR(20) NOT NULL,
-                  PostId INT NOT NULL,
-                  UserId INT NOT NULL,
-                  Content TEXT NOT NULL,
-                  CreatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-                );";
-                await using var cmd = new MySqlCommand(sql, conn);
-                await cmd.ExecuteNonQueryAsync();
-            }
+            _connStr = await TestDbUtil.EnsureTestDbAsync();
 
             _config = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string?>
+                .AddInMemoryCollection(new[]
                 {
-                    { "ConnectionStrings:DefaultConnection", connStr }
+                    new KeyValuePair<string,string?>("ConnectionStrings:DefaultConnection", _connStr)
                 })
                 .Build();
 
             _dbHelper = new DbHelper(_config);
-            _reactions = new ReactionService(_dbHelper);
-            _comments = new CommentService(_dbHelper);
-            _feed = new FeedService(_dbHelper, _reactions, _comments);
+
+            var reactionRepo = new ReactionRepository(_dbHelper);
+            var commentRepo  = new CommentRepository(_dbHelper);
+            var feedRepo     = new FeedRepository(_dbHelper);
+
+            _reactions = new ReactionService(reactionRepo);
+            _comments  = new CommentService(commentRepo);
+            _feed      = new FeedService(feedRepo, _reactions, _comments);
         }
 
         [OneTimeTearDown]
-        public async Task OneTimeTeardown()
-        {
-            if (_ownsContainer && _mysql != null)
-            {
-                await _mysql.DisposeAsync();
-            }
-        }
+        public async Task OneTimeTeardown() => await TestDbUtil.DisposeAsync();
 
         [SetUp]
         public async Task Setup()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
             var sql = @"
-                DELETE FROM PostComments;
-                DELETE FROM PostReactions;
-                DELETE FROM Requests;
-                DELETE FROM TutorPosts;
-                DELETE FROM Users;
-                ALTER TABLE PostComments AUTO_INCREMENT = 1;
-                ALTER TABLE PostReactions AUTO_INCREMENT = 1;
-                ALTER TABLE Requests AUTO_INCREMENT = 1;
-                ALTER TABLE TutorPosts AUTO_INCREMENT = 1;
-                ALTER TABLE Users AUTO_INCREMENT = 1;";
-            await using var cmd = new MySqlCommand(sql, conn);
+DELETE FROM dbo.PostComments;
+DELETE FROM dbo.PostReactions;
+DELETE FROM dbo.Requests;
+DELETE FROM dbo.TutorPosts;
+DELETE FROM dbo.Users;
+
+IF EXISTS (SELECT 1 FROM sys.identity_columns WHERE [object_id] = OBJECT_ID('dbo.PostComments'))
+    DBCC CHECKIDENT('dbo.PostComments', RESEED, 0);
+IF EXISTS (SELECT 1 FROM sys.identity_columns WHERE [object_id] = OBJECT_ID('dbo.PostReactions'))
+    DBCC CHECKIDENT('dbo.PostReactions', RESEED, 0);
+IF EXISTS (SELECT 1 FROM sys.identity_columns WHERE [object_id] = OBJECT_ID('dbo.Requests'))
+    DBCC CHECKIDENT('dbo.Requests', RESEED, 0);
+IF EXISTS (SELECT 1 FROM sys.identity_columns WHERE [object_id] = OBJECT_ID('dbo.TutorPosts'))
+    DBCC CHECKIDENT('dbo.TutorPosts', RESEED, 0);
+IF EXISTS (SELECT 1 FROM sys.identity_columns WHERE [object_id] = OBJECT_ID('dbo.Users'))
+    DBCC CHECKIDENT('dbo.Users', RESEED, 0);";
+            await using var cmd = new SqlCommand(sql, conn);
             await cmd.ExecuteNonQueryAsync();
         }
 
-        private async Task<int> InsertUser(MySqlConnection conn, string name, string email)
+        private async Task<int> InsertUser(SqlConnection conn, string name, string email)
         {
-            var cmd = new MySqlCommand("INSERT INTO Users (FullName, Email) VALUES (@n, @e); SELECT LAST_INSERT_ID();", conn);
+            var cmd = new SqlCommand("INSERT INTO dbo.Users (FullName, Email, PasswordHash, Role, CreatedAt, IsActive, EmailVerified) VALUES (@n,@e,'x','Learner',SYSUTCDATETIME(),1,1); SELECT CAST(SCOPE_IDENTITY() AS INT);", conn);
             cmd.Parameters.AddWithValue("@n", name);
             cmd.Parameters.AddWithValue("@e", email);
             return Convert.ToInt32(await cmd.ExecuteScalarAsync());
         }
 
-        private async Task<int> InsertLesson(MySqlConnection conn, int tutorId, string title, string desc, DateTime? created = null)
+        private async Task<int> InsertLesson(SqlConnection conn, int tutorId, string title, string desc, DateTime? created = null)
         {
-            var cmd = new MySqlCommand(@"
-                INSERT INTO TutorPosts (TutorId, Title, Description, MaxParticipants, Status, CreatedAt)
-                VALUES (@t, @ti, @d, 5, 'Open', @c); SELECT LAST_INSERT_ID();", conn);
+            var cmd = new SqlCommand(@"
+INSERT INTO dbo.TutorPosts (TutorId, Title, Description, MaxParticipants, Status, CreatedAt)
+VALUES (@t, @ti, @d, 5, 'Open', @c);
+SELECT CAST(SCOPE_IDENTITY() AS INT);", conn);
             cmd.Parameters.AddWithValue("@t", tutorId);
             cmd.Parameters.AddWithValue("@ti", title);
-            cmd.Parameters.AddWithValue("@d", desc);
-            cmd.Parameters.AddWithValue("@c", created ?? DateTime.UtcNow);
+            cmd.Parameters.AddWithValue("@d", (object?)desc ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@c", (object?)created ?? DateTime.UtcNow);
             return Convert.ToInt32(await cmd.ExecuteScalarAsync());
         }
 
-        private async Task<int> InsertRequest(MySqlConnection conn, int learnerId, string skill, string topic, string desc, DateTime? created = null)
+        private async Task<int> InsertRequest(SqlConnection conn, int learnerId, string skill, string topic, string desc, DateTime? created = null)
         {
-            var cmd = new MySqlCommand(@"
-                INSERT INTO Requests (LearnerId, SkillName, Topic, Description, Status, CreatedAt)
-                VALUES (@l, @s, @t, @d, 'OPEN', @c); SELECT LAST_INSERT_ID();", conn);
+            var cmd = new SqlCommand(@"
+INSERT INTO dbo.Requests (LearnerId, SkillName, Topic, Description, Status, CreatedAt)
+VALUES (@l, @s, @t, @d, 'OPEN', @c);
+SELECT CAST(SCOPE_IDENTITY() AS INT);", conn);
             cmd.Parameters.AddWithValue("@l", learnerId);
             cmd.Parameters.AddWithValue("@s", skill);
-            cmd.Parameters.AddWithValue("@t", topic);
-            cmd.Parameters.AddWithValue("@d", desc);
-            cmd.Parameters.AddWithValue("@c", created ?? DateTime.UtcNow);
+            cmd.Parameters.AddWithValue("@t", (object?)topic ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@d", (object?)desc ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@c", (object?)created ?? DateTime.UtcNow);
             return Convert.ToInt32(await cmd.ExecuteScalarAsync());
         }
 
         [Test]
         public async Task GetFeed_ShouldReturnUnion_WithReactions_AndComments_AndSearch()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
 
             var tutor = await InsertUser(conn, "Alice Tutor", "alice@ex.com");
@@ -207,21 +122,17 @@ namespace SkillLink.Tests.Services
             var lessonId = await InsertLesson(conn, tutor, "C# Advanced", "LINQ", DateTime.UtcNow.AddMinutes(-10));
             var reqId = await InsertRequest(conn, learner, "Java", "Streams", "Collections", DateTime.UtcNow);
 
-            // reactions
             _reactions.UpsertReaction(me, "LESSON", lessonId, "LIKE");
             _reactions.UpsertReaction(me, "REQUEST", reqId, "DISLIKE");
 
-            // comments
             _comments.Add("LESSON", lessonId, me, "Great!");
             _comments.Add("REQUEST", reqId, me, "I can help");
 
-            // page 1
             var page1 = _feed.GetFeed(me, page: 1, pageSize: 10, q: null);
             page1.Should().HaveCount(2);
-            page1[0].PostType.Should().Be("REQUEST"); // created later (newest first)
+            page1[0].PostType.Should().Be("REQUEST");
             page1[1].PostType.Should().Be("LESSON");
 
-            // verify augmentation
             var req = page1[0];
             req.Likes.Should().Be(0);
             req.Dislikes.Should().Be(1);
@@ -234,7 +145,6 @@ namespace SkillLink.Tests.Services
             les.MyReaction.Should().Be("LIKE");
             les.CommentCount.Should().Be(1);
 
-            // search: "c#" should match lesson title/desc; "java" should match request skill
             var byCsharp = _feed.GetFeed(me, 1, 10, q: "c#");
             byCsharp.Should().ContainSingle(x => x.PostType == "LESSON" && x.PostId == lessonId);
 
@@ -245,7 +155,7 @@ namespace SkillLink.Tests.Services
         [Test]
         public async Task ReactionService_ShouldUpsert_AndRemove()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
 
             var u1 = await InsertUser(conn, "U1", "u1@ex.com");
@@ -277,7 +187,7 @@ namespace SkillLink.Tests.Services
         [Test]
         public async Task CommentService_ShouldAdd_Get_Count_Delete_WithOwnerOrAdmin()
         {
-            await using var conn = new MySqlConnection(_config.GetConnectionString("DefaultConnection"));
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
 
             var tutor = await InsertUser(conn, "Tutor", "t@ex.com");
@@ -293,15 +203,12 @@ namespace SkillLink.Tests.Services
             all.Should().HaveCount(2);
             var c1 = (int)all[0].GetType().GetProperty("CommentId")!.GetValue(all[0])!;
 
-            // delete by comment owner
             _comments.Delete(c1, author, isAdmin: false);
             _comments.Count("LESSON", postId).Should().Be(1);
 
-            // delete by post owner (tutor)
             var c2 = (int)all[1].GetType().GetProperty("CommentId")!.GetValue(all[1])!;
             _comments.Delete(c2, tutor, isAdmin: false);
             _comments.Count("LESSON", postId).Should().Be(0);
         }
     }
 }
-

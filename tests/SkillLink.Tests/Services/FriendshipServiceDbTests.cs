@@ -1,141 +1,66 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Threading.Tasks;
 using FluentAssertions;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
-using MySql.Data.MySqlClient;
 using NUnit.Framework;
+using SkillLink.API.Data;
+using SkillLink.API.Repositories;
 using SkillLink.API.Services;
-using SkillLink.API.Models; // adjust if needed
+using SkillLink.Tests.Db;
 
 namespace SkillLink.Tests.Services
 {
     [TestFixture]
     public class FriendshipServiceDbTests
     {
-        private Testcontainers.MySql.MySqlContainer _mysql = null!;
-        private bool _ownsContainer = false;
-        private string? _externalConnStr = null;
-
         private IConfiguration _config = null!;
         private DbHelper _dbHelper = null!;
         private FriendshipService _sut = null!;
+        private string _connStr = null!;
 
         [OneTimeSetUp]
         public async Task OneTimeSetup()
         {
-            // Allow external MySQL via env var (optional)
-            var external = Environment.GetEnvironmentVariable("SKILLLINK_TEST_MYSQL");
-            if (!string.IsNullOrWhiteSpace(external))
-            {
-                _externalConnStr = external;
-            }
-
-            // If no external DB, try Docker
-            var dockerHost = Environment.GetEnvironmentVariable("DOCKER_HOST");
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            var sock1 = "/var/run/docker.sock";
-            var sock2 = Path.Combine(home, ".docker/run/docker.sock");
-            var dockerSocketExists = File.Exists(sock1) || File.Exists(sock2);
-
-            if (!(_externalConnStr != null || dockerSocketExists || !string.IsNullOrEmpty(dockerHost)))
-            {
-                Assert.Ignore("Docker not available. Skipping FriendshipService DB integration tests.");
-                return;
-            }
-
-            if (_externalConnStr == null)
-            {
-                try
-                {
-                    _mysql = new Testcontainers.MySql.MySqlBuilder()
-                        .WithImage("mysql:8.0")
-                        .WithDatabase("skilllink_test")
-                        .WithUsername("testuser")
-                        .WithPassword("testpass")
-                        .Build();
-                    await _mysql.StartAsync();
-                    _ownsContainer = true;
-                }
-                catch (Exception ex)
-                {
-                    Assert.Ignore($"Docker not available or failed to start MySQL container. Skipping DB tests. Details: {ex.Message}");
-                    return;
-                }
-            }
-
-            var connStr = _externalConnStr ?? _mysql.GetConnectionString();
-
-            // Create schema
-            await using (var conn = new MySqlConnection(connStr))
-            {
-                await conn.OpenAsync();
-                var sql = @"
-                    CREATE TABLE IF NOT EXISTS Users (
-                      UserId INT AUTO_INCREMENT PRIMARY KEY,
-                      FullName VARCHAR(255) NOT NULL,
-                      Email VARCHAR(255) NOT NULL UNIQUE,
-                      ProfilePicture VARCHAR(255) NULL
-                    );
-
-                    CREATE TABLE IF NOT EXISTS Friendships (
-                      Id INT AUTO_INCREMENT PRIMARY KEY,
-                      FollowerId INT NOT NULL,
-                      FollowedId INT NOT NULL,
-                      CreatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                      UNIQUE KEY uq_follow (FollowerId, FollowedId),
-                      FOREIGN KEY (FollowerId) REFERENCES Users(UserId) ON DELETE CASCADE,
-                      FOREIGN KEY (FollowedId) REFERENCES Users(UserId) ON DELETE CASCADE
-                    );
-                ";
-                await using var cmd = new MySqlCommand(sql, conn);
-                await cmd.ExecuteNonQueryAsync();
-            }
-
+            _connStr = await TestDbUtil.EnsureTestDbAsync();
             _config = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string?>
+                .AddInMemoryCollection(new[]
                 {
-                    { "ConnectionStrings:DefaultConnection", connStr }
+                    new KeyValuePair<string,string?>("ConnectionStrings:DefaultConnection", _connStr)
                 })
                 .Build();
 
             _dbHelper = new DbHelper(_config);
-            _sut = new FriendshipService(_dbHelper);
+            var repo = new FriendshipRepository(_dbHelper);
+            _sut = new FriendshipService(repo);
         }
 
         [OneTimeTearDown]
-        public async Task OneTimeTeardown()
-        {
-            if (_ownsContainer && _mysql != null)
-            {
-                await _mysql.DisposeAsync();
-            }
-        }
+        public async Task OneTimeTeardown() => await TestDbUtil.DisposeAsync();
 
         [SetUp]
         public async Task Setup()
         {
-            var connStr = _config.GetConnectionString("DefaultConnection");
-            await using var conn = new MySqlConnection(connStr);
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
-
-            // Clean tables
             var sql = @"
-                DELETE FROM Friendships;
-                DELETE FROM Users;
-                ALTER TABLE Friendships AUTO_INCREMENT = 1;
-                ALTER TABLE Users AUTO_INCREMENT = 1;
-            ";
-            await using var cmd = new MySqlCommand(sql, conn);
+DELETE FROM dbo.Friendships;
+DELETE FROM dbo.Users;
+
+IF EXISTS (SELECT 1 FROM sys.identity_columns WHERE [object_id] = OBJECT_ID('dbo.Friendships'))
+    DBCC CHECKIDENT('dbo.Friendships', RESEED, 0);
+IF EXISTS (SELECT 1 FROM sys.identity_columns WHERE [object_id] = OBJECT_ID('dbo.Users'))
+    DBCC CHECKIDENT('dbo.Users', RESEED, 0);";
+            await using var cmd = new SqlCommand(sql, conn);
             await cmd.ExecuteNonQueryAsync();
         }
 
-        private async Task<int> InsertUserAsync(MySqlConnection conn, string name, string email, string? pic = null)
+        private async Task<int> InsertUserAsync(SqlConnection conn, string name, string email, string? pic = null)
         {
-            var cmd = new MySqlCommand(
-                @"INSERT INTO Users (FullName, Email, ProfilePicture) VALUES (@n, @e, @p);
-                  SELECT LAST_INSERT_ID();", conn);
+            var cmd = new SqlCommand(
+                @"INSERT INTO dbo.Users (FullName, Email, ProfilePicture) VALUES (@n, @e, @p);
+                  SELECT CAST(SCOPE_IDENTITY() AS INT);", conn);
             cmd.Parameters.AddWithValue("@n", name);
             cmd.Parameters.AddWithValue("@e", email);
             cmd.Parameters.AddWithValue("@p", (object?)pic ?? DBNull.Value);
@@ -146,8 +71,7 @@ namespace SkillLink.Tests.Services
         [Test]
         public async Task Follow_ShouldInsert_And_PreventDuplicates()
         {
-            var connStr = _config.GetConnectionString("DefaultConnection");
-            await using var conn = new MySqlConnection(connStr);
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
 
             var alice = await InsertUserAsync(conn, "Alice", "alice@example.com");
@@ -155,14 +79,12 @@ namespace SkillLink.Tests.Services
 
             _sut.Follow(alice, bob);
 
-            // second time should throw our InvalidOperationException
             Action again = () => _sut.Follow(alice, bob);
             again.Should().Throw<InvalidOperationException>()
                  .WithMessage("Already following");
 
-            // check stored
-            var countCmd = new MySqlCommand(
-                "SELECT COUNT(*) FROM Friendships WHERE FollowerId=@f AND FollowedId=@fd", conn);
+            var countCmd = new SqlCommand(
+                "SELECT COUNT(*) FROM dbo.Friendships WHERE FollowerId=@f AND FollowedId=@fd", conn);
             countCmd.Parameters.AddWithValue("@f", alice);
             countCmd.Parameters.AddWithValue("@fd", bob);
             var count = Convert.ToInt32(await countCmd.ExecuteScalarAsync());
@@ -172,8 +94,7 @@ namespace SkillLink.Tests.Services
         [Test]
         public async Task Unfollow_ShouldDeleteRow()
         {
-            var connStr = _config.GetConnectionString("DefaultConnection");
-            await using var conn = new MySqlConnection(connStr);
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
 
             var a = await InsertUserAsync(conn, "A", "a@example.com");
@@ -182,8 +103,8 @@ namespace SkillLink.Tests.Services
             _sut.Follow(a, b);
             _sut.Unfollow(a, b);
 
-            var countCmd = new MySqlCommand(
-                "SELECT COUNT(*) FROM Friendships WHERE FollowerId=@f AND FollowedId=@fd", conn);
+            var countCmd = new SqlCommand(
+                "SELECT COUNT(*) FROM dbo.Friendships WHERE FollowerId=@f AND FollowedId=@fd", conn);
             countCmd.Parameters.AddWithValue("@f", a);
             countCmd.Parameters.AddWithValue("@fd", b);
             var count = Convert.ToInt32(await countCmd.ExecuteScalarAsync());
@@ -193,8 +114,7 @@ namespace SkillLink.Tests.Services
         [Test]
         public async Task GetMyFriends_ShouldReturnFollowedUsers()
         {
-            var connStr = _config.GetConnectionString("DefaultConnection");
-            await using var conn = new MySqlConnection(connStr);
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
 
             var me = await InsertUserAsync(conn, "Me", "me@example.com");
@@ -213,8 +133,7 @@ namespace SkillLink.Tests.Services
         [Test]
         public async Task GetFollowers_ShouldReturnUsersWhoFollowMe()
         {
-            var connStr = _config.GetConnectionString("DefaultConnection");
-            await using var conn = new MySqlConnection(connStr);
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
 
             var me = await InsertUserAsync(conn, "Me", "me@example.com");
@@ -233,8 +152,7 @@ namespace SkillLink.Tests.Services
         [Test]
         public async Task SearchUsers_ShouldMatchNameOrEmail_ExcludeSelf_AndLimit()
         {
-            var connStr = _config.GetConnectionString("DefaultConnection");
-            await using var conn = new MySqlConnection(connStr);
+            await using var conn = new SqlConnection(_connStr);
             await conn.OpenAsync();
 
             var me = await InsertUserAsync(conn, "Me Myself", "me@example.com");
