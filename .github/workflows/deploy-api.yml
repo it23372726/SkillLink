@@ -1,0 +1,39 @@
+name: Deploy SkillLink API
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  AZURE_WEBAPP_NAME: skilllink-api-dev
+  DOTNET_VERSION: '9.0.x'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore SkillLink.API/SkillLink.API.csproj
+
+      - name: Build
+        run: dotnet build SkillLink.API/SkillLink.API.csproj --configuration Release --no-restore
+
+      - name: Publish
+        run: dotnet publish SkillLink.API/SkillLink.API.csproj -c Release -o ./publish --no-build
+
+      - name: Deploy to Azure WebApp
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: ./publish
