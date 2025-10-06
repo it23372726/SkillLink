@@ -2,8 +2,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import api from "../api/axios";
+// import api from "../api/axios";
 import Dock from "../components/Dock";
+import { requestsApi, tutorPostsApi } from "../api";
+import { toImageUrl } from "../utils/image";
 
 /* ========================== UI Atoms ========================== */
 const GlassCard = ({ className = "", children }) => (
@@ -97,8 +99,7 @@ const statusStyles = {
     "bg-red-200/70 text-red-900 dark:bg-red-400/20 dark:text-red-200",
 
   // Tutor Posts
-  Open:
-    "bg-blue-200/70 text-blue-900 dark:bg-blue-400/20 dark:text-blue-200",
+  Open: "bg-blue-200/70 text-blue-900 dark:bg-blue-400/20 dark:text-blue-200",
   Closed:
     "bg-slate-200/70 text-slate-900 dark:bg-slate-400/20 dark:text-slate-200",
   Scheduled:
@@ -167,6 +168,7 @@ const RequestsPane = () => {
     skillName: "",
     topic: "",
     description: "",
+    learnerId: null,
   });
 
   useEffect(() => {
@@ -178,8 +180,8 @@ const RequestsPane = () => {
     try {
       setIsLoading(true);
       const [reqRes, accRes] = await Promise.all([
-        api.get("/requests"),
-        api.get("/requests/accepted"),
+        requestsApi.list(),
+        requestsApi.listAcceptedByMe(),
       ]);
       setRequests(reqRes.data || []);
       setAcceptedRequests(accRes.data || []);
@@ -237,9 +239,9 @@ const RequestsPane = () => {
       if (!acceptedMap[requestId]) {
         setAcceptedRequests((prev) => [...prev, { requestId, status: "PENDING" }]);
       }
-      await api.post(`/requests/${requestId}/accept`);
+      await requestsApi.accept(requestId);
       setMessage("Request accepted successfully!");
-      const acc = await api.get("/requests/accepted");
+      const acc = await requestsApi.listAcceptedByMe();
       setAcceptedRequests(acc.data || []);
     } catch {
       setMessage("Failed to accept request");
@@ -256,10 +258,12 @@ const RequestsPane = () => {
     if (!formData.skillName.trim()) return;
     try {
       setIsSubmitting(true);
-      await api.post("/requests", {
-        // Server infers learnerId from the authenticated user token
-        ...formData,
-      });
+      await requestsApi.create({
+             skillName: formData.skillName,
+             topic: formData.topic,
+             description: formData.description,
+             learnerId: user.userId,
+     });
       setMessage("Request created successfully!");
       setShowCreateModal(false);
       setFormData({ skillName: "", topic: "", description: "" });
@@ -290,9 +294,7 @@ const RequestsPane = () => {
     e.preventDefault();
     try {
       setIsSubmitting(true);
-      await api.put(`/requests/${editingRequest.requestId}`, {
-        ...formData,
-      });
+      await requestsApi.update(editingRequest.requestId, { ...formData });
       setMessage("Request updated successfully!");
       cancelEditing();
       loadAll();
@@ -306,7 +308,7 @@ const RequestsPane = () => {
   const deleteRequest = async (requestId) => {
     if (!window.confirm("Are you sure you want to delete this request?")) return;
     try {
-      await api.delete(`/requests/${requestId}`);
+      await requestsApi.remove(requestId);
       setMessage("Request deleted successfully!");
       loadAll();
     } catch {
@@ -363,7 +365,13 @@ const RequestsPane = () => {
                 <option value="OLDEST">Oldest first</option>
               </select>
 
-              <MacPrimary id="open-create-request-id" data-testid="open-create-request" onClick={() => setShowCreateModal(true)}>+ Create Request</MacPrimary>
+              <MacPrimary
+                id="open-create-request-id"
+                data-testid="open-create-request"
+                onClick={() => setShowCreateModal(true)}
+              >
+                + Create Request
+              </MacPrimary>
             </div>
           </div>
 
@@ -424,7 +432,9 @@ const RequestsPane = () => {
                       </div>
 
                       {request.description && (
-                        <p className="text-slate-700 dark:text-slate-200 mt-3">{request.description}</p>
+                        <p className="text-slate-700 dark:text-slate-200 mt-3">
+                          {request.description}
+                        </p>
                       )}
 
                       <div className="flex justify-between items-center mt-5 text-sm text-slate-500 dark:text-slate-400">
@@ -474,7 +484,10 @@ const RequestsPane = () => {
 
       {/* Create Modal */}
       {showCreateModal && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" data-testid="create-request-modal">
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50"
+          data-testid="create-request-modal"
+        >
           <GlassCard className="w-full max-w-md">
             <div className="p-6 border-b border-slate-200 dark:border-slate-700">
               <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100">
@@ -483,7 +496,9 @@ const RequestsPane = () => {
             </div>
             <form onSubmit={createRequest} className="p-6 space-y-4">
               <div>
-                <label className="block text-sm text-slate-700 dark:text-slate-300">Skill Name *</label>
+                <label className="block text-sm text-slate-700 dark:text-slate-300">
+                  Skill Name *
+                </label>
                 <input
                   type="text"
                   name="skillName"
@@ -506,7 +521,9 @@ const RequestsPane = () => {
                 />
               </div>
               <div>
-                <label className="block text-sm text-slate-700 dark:text-slate-300">Description</label>
+                <label className="block text-sm text-slate-700 dark:text-slate-300">
+                  Description
+                </label>
                 <textarea
                   name="description"
                   value={formData.description}
@@ -521,7 +538,12 @@ const RequestsPane = () => {
                 <MacButton type="button" onClick={() => setShowCreateModal(false)}>
                   Cancel
                 </MacButton>
-                <MacPrimary type="submit" disabled={isSubmitting} id="create-request-submit-id" data-testid="create-request-submit">
+                <MacPrimary
+                  type="submit"
+                  disabled={isSubmitting}
+                  id="create-request-submit-id"
+                  data-testid="create-request-submit"
+                >
                   {isSubmitting ? "Creating..." : "Create"}
                 </MacPrimary>
               </div>
@@ -541,7 +563,9 @@ const RequestsPane = () => {
             </div>
             <form onSubmit={updateRequest} className="p-6 space-y-4">
               <div>
-                <label className="block text-sm text-slate-700 dark:text-slate-300">Skill Name *</label>
+                <label className="block text-sm text-slate-700 dark:text-slate-300">
+                  Skill Name *
+                </label>
                 <input
                   type="text"
                   name="skillName"
@@ -552,7 +576,9 @@ const RequestsPane = () => {
                 />
               </div>
               <div>
-                <label className="block text-sm text-slate-700 dark:text-slate-300">Topic</label>
+                <label className="block text-sm text-slate-700 dark:text-slate-300">
+                  Topic
+                </label>
                 <input
                   type="text"
                   name="topic"
@@ -562,7 +588,9 @@ const RequestsPane = () => {
                 />
               </div>
               <div>
-                <label className="block text-sm text-slate-700 dark:text-slate-300">Description</label>
+                <label className="block text-sm text-slate-700 dark:text-slate-300">
+                  Description
+                </label>
                 <textarea
                   name="description"
                   value={formData.description}
@@ -598,9 +626,13 @@ const LessonsPane = () => {
   const [showCreate, setShowCreate] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ title: "", description: "", maxParticipants: 5 });
-  const [imageFile, setImageFile] = useState(null);           // NEW: create image
-  const [editImageFile, setEditImageFile] = useState(null);   // NEW: edit image
+  const [form, setForm] = useState({
+    title: "",
+    description: "",
+    maxParticipants: 5,
+  });
+  const [imageFile, setImageFile] = useState(null);
+  const [editImageFile, setEditImageFile] = useState(null);
 
   const [showSchedule, setShowSchedule] = useState(false);
   const [scheduleTarget, setScheduleTarget] = useState(null);
@@ -618,7 +650,7 @@ const LessonsPane = () => {
   const loadLessons = async () => {
     try {
       setLoading(true);
-      const res = await api.get("/tutor-posts");
+      const res = await tutorPostsApi.list();
       setLessons(res.data || []);
     } catch {
       setMsg("Failed to load lessons");
@@ -639,34 +671,87 @@ const LessonsPane = () => {
 
   const onChange = (e) => setForm((p) => ({ ...p, [e.target.name]: e.target.value }));
 
+  /**
+   * Try uploading using multiple common combinations:
+   *  - endpoints: /image, /upload, /image/upload
+   *  - methods: POST then PUT
+   *  - field names: image, file, imageFile, photo
+   */
   const uploadLessonImage = async (postId, file) => {
-    const fd = new FormData();
-    fd.append("file", file);
-    await api.post(`/tutor-posts/${postId}/image`, fd, {
-      headers: { "Content-Type": "multipart/form-data" },
-    });
+    if (!file) return;
+
+    let lastError = null;
+
+      try {
+        await tutorPostsApi.uploadImage( postId, file);
+        // success
+        return;
+      } catch (err) {
+        lastError = err;
+        // Continue trying other combos
+      }
+
+    // If we reach here, all attempts failed. Throw the last error up.
+    const serverMsg =
+      lastError?.response?.data?.message ||
+      (lastError?.response?.data?.title &&
+        `${lastError.response.data.title}${
+          lastError?.response?.data?.errors
+            ? " - " + Object.values(lastError.response.data.errors).flat().join(", ")
+            : ""
+        }`) ||
+      lastError?.message ||
+      "Upload failed";
+    throw new Error(serverMsg);
   };
 
   const createLesson = async (e) => {
     e.preventDefault();
     try {
-      // Validate image if present
+      if (!form.title.trim()) {
+        setMsg("Title is required");
+        return;
+      }
       if (!isValidImage(imageFile)) {
         setMsg("Image must be an image file and ≤ 10MB");
         return;
       }
 
-      // Create post (do NOT send tutorId — we read from JWT)
-      const createRes = await api.post("/tutor-posts", {
+      // Create post (backend should take tutor from JWT)
+      const createRes = await tutorPostsApi.create({
         title: form.title.trim(),
         description: form.description?.trim() || "",
         maxParticipants: Number(form.maxParticipants) || 1,
       });
 
-      const newId = createRes?.data?.postId;
-      // Optional image upload
-      if (imageFile && newId) {
-        await uploadLessonImage(newId, imageFile);
+      const newId =
+        createRes?.data?.postId ??
+        createRes?.data?.id ??
+        createRes?.data?.tutorPostId ??
+        createRes?.data?.data?.postId ??
+        null;
+
+      if (!newId) {
+        console.error("Create response doesn't include post id:", createRes?.data);
+        setMsg("Server didn't return a post id. Check backend response.");
+        return;
+      }
+
+      if (imageFile) {
+        try {
+          await uploadLessonImage(newId, imageFile);
+        } catch (upErr) {
+          // Lesson created but image failed — show partial success
+          setMsg(
+            `Lesson created, but image upload failed: ${upErr.message || "Unknown error"}`
+          );
+          // Still reload to show the created lesson
+          setShowCreate(false);
+          setForm({ title: "", description: "", maxParticipants: 5 });
+          setImageFile(null);
+          await loadLessons();
+          return;
+        }
       }
 
       setMsg("Lesson posted successfully!");
@@ -675,7 +760,17 @@ const LessonsPane = () => {
       setImageFile(null);
       loadLessons();
     } catch (err) {
-      setMsg(err?.response?.data?.message || "Failed to create lesson");
+      const emsg =
+        err?.response?.data?.message ||
+        (err?.response?.data?.title &&
+          `${err.response.data.title}${
+            err?.response?.data?.errors
+              ? " - " + Object.values(err.response.data.errors).flat().join(", ")
+              : ""
+          }`) ||
+        err?.message ||
+        "Failed to create lesson";
+      setMsg(emsg);
     }
   };
 
@@ -693,22 +788,34 @@ const LessonsPane = () => {
   const updateLesson = async (e) => {
     e.preventDefault();
     try {
-      // Validate image if present
+      if (!form.title.trim()) {
+        setMsg("Title is required");
+        return;
+      }
       if (!isValidImage(editImageFile)) {
         setMsg("Image must be an image file and ≤ 10MB");
         return;
       }
 
-      // Update metadata
-      await api.put(`/tutor-posts/${editing.postId}`, {
+      await tutorPostsApi.update(editing.postId, {
         title: form.title.trim(),
         description: form.description?.trim() || "",
         maxParticipants: Number(form.maxParticipants) || 1,
       });
 
-      // Optional image replace
       if (editImageFile) {
-        await uploadLessonImage(editing.postId, editImageFile);
+        try {
+          await uploadLessonImage(editing.postId, editImageFile);
+        } catch (upErr) {
+          setMsg(
+            `Lesson updated, but image upload failed: ${upErr.message || "Unknown error"}`
+          );
+          setShowEdit(false);
+          setEditing(null);
+          setEditImageFile(null);
+          await loadLessons();
+          return;
+        }
       }
 
       setMsg("Lesson updated successfully!");
@@ -717,14 +824,24 @@ const LessonsPane = () => {
       setEditImageFile(null);
       loadLessons();
     } catch (err) {
-      setMsg(err?.response?.data?.message || "Failed to update");
+      const emsg =
+        err?.response?.data?.message ||
+        (err?.response?.data?.title &&
+          `${err.response.data.title}${
+            err?.response?.data?.errors
+              ? " - " + Object.values(err.response.data.errors).flat().join(", ")
+              : ""
+          }`) ||
+        err?.message ||
+        "Failed to update";
+      setMsg(emsg);
     }
   };
 
   const deleteLesson = async (postId) => {
     if (!window.confirm("Delete this lesson post?")) return;
     try {
-      await api.delete(`/tutor-posts/${postId}`);
+      await tutorPostsApi.remove(postId);
       setMsg("Lesson deleted");
       loadLessons();
     } catch {
@@ -742,7 +859,7 @@ const LessonsPane = () => {
   const schedule = async (e) => {
     e.preventDefault();
     try {
-      await api.put(`/tutor-posts/${scheduleTarget.postId}/schedule`, {
+      await tutorPostsApi.schedule(scheduleTarget.postId, {
         scheduledAt: new Date(scheduledAt).toISOString(),
       });
       setMsg("Meeting scheduled");
@@ -787,7 +904,9 @@ const LessonsPane = () => {
           {/* Lessons List */}
           {loading ? (
             <div className="grid gap-4">
-              {[...Array(3)].map((_, i) => <SkeletonCard key={i} />)}
+              {[...Array(3)].map((_, i) => (
+                <SkeletonCard key={i} />
+              ))}
             </div>
           ) : myLessons.length === 0 ? (
             <GlassCard className="p-10 mt-4 text-center">
@@ -821,6 +940,16 @@ const LessonsPane = () => {
                       <p className="text-slate-700 dark:text-slate-200 mt-3">{p.description}</p>
                     )}
 
+                    {/* Preview image if available */}
+                    {p.imageUrl && (
+                      <img
+                        src={toImageUrl(p.imageUrl)}
+                        alt={p.title}
+                        className="mt-3 h-40 w-full object-cover rounded-xl border border-slate-200 dark:border-slate-700"
+                        loading="lazy"
+                      />
+                    )}
+
                     {/* Scheduled At */}
                     {scheduled && (
                       <div className="mt-2 text-sm text-blue-600 dark:text-blue-400">
@@ -832,15 +961,15 @@ const LessonsPane = () => {
                     <div className="flex justify-between items-center mt-5 text-sm text-slate-500 dark:text-slate-400">
                       <div className="flex items-center">
                         <div className="w-8 h-8 bg-indigo-100 text-indigo-700 dark:bg-indigo-800 dark:text-white rounded-full flex items-center justify-center mr-2 font-semibold">
-                          {p.tutorName?.charAt(0).toUpperCase() || user.fullName?.charAt(0).toUpperCase() || "T"}
+                          {p.tutorName?.charAt(0).toUpperCase() ||
+                            user.fullName?.charAt(0).toUpperCase() ||
+                            "T"}
                         </div>
                         <div>
                           <span className="font-medium text-slate-800 dark:text-slate-200">
                             {p.tutorName || user.fullName || "Tutor"}
                           </span>
-                          <span className="ml-1">
-                            • {new Date(p.createdAt).toLocaleDateString()}
-                          </span>
+                          <span className="ml-1">• {new Date(p.createdAt).toLocaleDateString()}</span>
                         </div>
                       </div>
 
@@ -918,7 +1047,13 @@ const LessonsPane = () => {
               </div>
 
               <div className="flex justify-end gap-2">
-                <MacButton type="button" onClick={() => { setShowCreate(false); setImageFile(null); }}>
+                <MacButton
+                  type="button"
+                  onClick={() => {
+                    setShowCreate(false);
+                    setImageFile(null);
+                  }}
+                >
                   Cancel
                 </MacButton>
                 <MacPrimary type="submit">Create</MacPrimary>
@@ -983,7 +1118,13 @@ const LessonsPane = () => {
               </div>
 
               <div className="flex justify-end gap-2">
-                <MacButton type="button" onClick={() => { setShowEdit(false); setEditImageFile(null); }}>
+                <MacButton
+                  type="button"
+                  onClick={() => {
+                    setShowEdit(false);
+                    setEditImageFile(null);
+                  }}
+                >
                   Cancel
                 </MacButton>
                 <MacPrimary type="submit">Update</MacPrimary>
@@ -998,7 +1139,9 @@ const LessonsPane = () => {
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
           <GlassCard className="w-full max-w-md">
             <div className="p-6 border-b border-slate-200 dark:border-slate-700">
-              <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Schedule Meeting</h3>
+              <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+                Schedule Meeting
+              </h3>
             </div>
             <form onSubmit={schedule} className="p-6 space-y-4">
               <input

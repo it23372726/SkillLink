@@ -1,9 +1,10 @@
 // src/components/friends/FriendsDrawer.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../../context/AuthContext";
-import api from "../../api/axios";
 import { GlassCard, MacButton, MacPrimary, Input } from "../UI";
-import { toImageUrl } from "../../api/base";
+import { toImageUrl } from "../../utils/image";
+import { friendsApi } from "../../api";
+
 
 /* ====== small utils ====== */
 const debounce = (fn, ms = 350) => {
@@ -66,7 +67,7 @@ export default function FriendsDrawer({ className = "" }) {
   const loadFriends = async () => {
     try {
       setLoadingFriends(true);
-      const res = await api.get("/friends/my");
+      const res = await friendsApi.my("/friends/my");
       setFriends(res.data || []);
     } catch (e) {
       setErr("Failed to load friends");
@@ -88,7 +89,7 @@ export default function FriendsDrawer({ className = "" }) {
         }
         try {
           setLoadingSuggest(true);
-          const res = await api.get(`/friends/search?q=${encodeURIComponent(q)}`);
+          const res = await friendsApi.search(`${encodeURIComponent(q)}`);
           setSugg(res.data || []);
         } catch {
           // ignore
@@ -105,7 +106,7 @@ export default function FriendsDrawer({ className = "" }) {
 
   const follow = async (id) => {
     try {
-      await api.post(`/friends/${id}/follow`);
+      await friendsApi.follow(`${id}`);
       await loadFriends(); // refresh list immediately
       setSugg((prev) => prev.filter((u) => u.userId !== id));
     } catch {
@@ -115,7 +116,7 @@ export default function FriendsDrawer({ className = "" }) {
 
   const unfollow = async (id) => {
     try {
-      await api.delete(`/friends/${id}/unfollow`);
+      await friendsApi.unfollow(`${id}`);
       await loadFriends();
     } catch {}
   };
