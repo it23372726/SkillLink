@@ -1,25 +1,58 @@
+version: "3.8"
+
 services:
+  # =========================
+  # 1) SQL Server (prod)
+  # =========================
   db:
-    image: mysql:8.0
+    image: mcr.microsoft.com/mssql/server:2022-latest
     container_name: skilllink-db
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: skilllink
-      MYSQL_USER: skilluser
-      MYSQL_PASSWORD: skillpass
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Your_password123"  # must meet MSSQL policy
+      MSSQL_PID: "Developer"
     ports:
-      - "3307:3306"
+      - "1434:1433"
     volumes:
-      - db_data:/var/lib/mysql
-      # Use a dedicated schema file for prod DB
-      - ./db/init/1_schema.sql:/docker-entrypoint-initdb.d/1_schema.sql:ro
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+      - db_data:/var/opt/mssql
 
+  # Run schema after DB is ready (T-SQL file)
+  db-init:
+    image: mcr.microsoft.com/mssql-tools:latest
+    container_name: skilllink-db-init
+    depends_on:
+      db:
+        condition: service_started
+    environment:
+      MSSQL_SA_PASSWORD: "Your_password123"
+    volumes:
+      - ./db/init:/scripts:ro  # Put 1_schema.sql here
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      set -e
+      # detect sqlcmd path
+      if [ -x /opt/mssql-tools18/bin/sqlcmd ]; then SQLCMD=/opt/mssql-tools18/bin/sqlcmd; \
+      elif [ -x /opt/mssql-tools/bin/sqlcmd ]; then SQLCMD=/opt/mssql-tools/bin/sqlcmd; \
+      else echo "sqlcmd not found in tools image" >&2; exit 1; fi
+
+      echo "Waiting for SQL Server (prod) to be ready..."
+      for i in $(seq 1 60); do
+        $SQLCMD -S db -U sa -P "$$MSSQL_SA_PASSWORD" -C -Q "SELECT 1" && break
+        echo "Still waiting..."; sleep 3
+      done
+
+      echo "Ensuring database [skilllink] exists..."
+      $SQLCMD -S db -U sa -P "$$MSSQL_SA_PASSWORD" -C -Q "IF DB_ID('skilllink') IS NULL CREATE DATABASE skilllink;"
+
+      echo "Applying schema to [skilllink]..."
+      $SQLCMD -S db -U sa -P "$$MSSQL_SA_PASSWORD" -d skilllink -C -i /scripts/1_schema.sql
+
+      echo "Schema applied for prod."
+
+  # =========================
+  # 2) API
+  # =========================
   api:
     build:
       context: ./SkillLink.API
@@ -28,15 +61,17 @@ services:
     restart: unless-stopped
     depends_on:
       db:
-        condition: service_healthy
+        condition: service_started
+      db-init:
+        condition: service_completed_successfully
     environment:
-      ASPNETCORE_ENVIRONMENT: "Production"
+      ASPNETCORE_ENVIRONMENT: "Development"
       ASPNETCORE_URLS: "http://+:8080"
       ASPNETCORE_HTTPS_PORT: "8443"
       CORS__Origins: "http://localhost:3000;http://127.0.0.1:3000"
 
-      # ---- Connection string for DbHelper ----
-      ConnectionStrings__DefaultConnection: "Server=db;Port=3306;Database=skilllink;Uid=skilluser;Pwd=skillpass;Allow User Variables=True;SslMode=None;AllowPublicKeyRetrieval=True"
+      # ---- SQL Server Connection string ----
+      ConnectionStrings__DefaultConnection: "Server=db;Database=skilllink;User Id=sa;Password=Your_password123;TrustServerCertificate=True;Encrypt=False;"
 
       # ---- JWT / App Settings ----
       Jwt__Key: "dev-secret-key-change"
@@ -45,7 +80,7 @@ services:
       Jwt__ExpireMinutes: "120"
       Api__BaseUrl: "http://localhost:5159"
 
-      # ---- SMTP placeholders (email will fail safely in tests) ----
+      # ---- SMTP placeholders ----
       Smtp__Host: "smtp.example.com"
       Smtp__Port: "587"
       Smtp__User: "user"
@@ -59,26 +94,53 @@ services:
       - ./SkillLink.API/wwwroot:/app/wwwroot
       - dpkeys:/root/.aspnet/DataProtection-Keys
 
+  # =========================
+  # 3) SQL Server (test)
+  # =========================
   db_test:
-    image: mysql:8.0
+    image: mcr.microsoft.com/mssql/server:2022-latest
     container_name: skilllink-db-test
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: skilllink_test
-      MYSQL_USER: testuser
-      MYSQL_PASSWORD: testpass
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Your_password123"
+      MSSQL_PID: "Developer"
     ports:
-      - "3308:3306"
+      - "1435:1433"
     volumes:
-      - db_test_data:/var/lib/mysql
-      # Use a dedicated schema file for test DB
-      - ./db_test/init/1_schema.sql:/docker-entrypoint-initdb.d/1_schema.sql:ro
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+      - db_test_data:/var/opt/mssql
+
+  # Run schema for test DB
+  db-test-init:
+    image: mcr.microsoft.com/mssql-tools:latest
+    container_name: skilllink-db-test-init
+    depends_on:
+      db_test:
+        condition: service_started
+    environment:
+      MSSQL_SA_PASSWORD: "Your_password123"
+    volumes:
+      - ./db_test/init:/scripts:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      set -e
+      if [ -x /opt/mssql-tools18/bin/sqlcmd ]; then SQLCMD=/opt/mssql-tools18/bin/sqlcmd; \
+      elif [ -x /opt/mssql-tools/bin/sqlcmd ]; then SQLCMD=/opt/mssql-tools/bin/sqlcmd; \
+      else echo "sqlcmd not found in tools image" >&2; exit 1; fi
+
+      echo "Waiting for SQL Server (test) to be ready..."
+      for i in $(seq 1 60); do
+        $SQLCMD -S db_test -U sa -P "$$MSSQL_SA_PASSWORD" -C -Q "SELECT 1" && break
+        echo "Still waiting (test DB)..."; sleep 3
+      done
+
+      echo "Ensuring database [skilllink_test] exists..."
+      $SQLCMD -S db_test -U sa -P "$$MSSQL_SA_PASSWORD" -C -Q "IF DB_ID('skilllink_test') IS NULL CREATE DATABASE skilllink_test;"
+
+      echo "Applying test schema..."
+      $SQLCMD -S db_test -U sa -P "$$MSSQL_SA_PASSWORD" -d skilllink_test -C -i /scripts/1_schema.sql
+
+      echo "Test schema applied."
 
 volumes:
   db_data:
