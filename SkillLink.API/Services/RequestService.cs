@@ -1,193 +1,29 @@
-using MySql.Data.MySqlClient;
+using SkillLink.API.Models;
+using SkillLink.API.Repositories.Abstractions;
 using SkillLink.API.Services.Abstractions;
 
 public class RequestService : IRequestService
 {
-    private readonly DbHelper _dbHelper;
+    private readonly IRequestRepository _repo;
 
-    public RequestService(DbHelper dbHelper){
-        _dbHelper = dbHelper;
-    }
-
-    //GET by Id with user info
-    public RequestWithUser? GetById(int requestId){
-        RequestWithUser? data = null;
-        using var conn = _dbHelper.GetConnection();
-        conn.Open();
-        using var cmd = new MySqlCommand(
-            "SELECT r.*, u.FullName, u.Email FROM Requests r JOIN Users u ON r.LearnerId = u.UserId WHERE r.RequestId = @requestid", 
-            conn
-        );
-        cmd.Parameters.AddWithValue("@requestid", requestId);
-        using var reader = cmd.ExecuteReader();
-        if(reader.Read()){
-            data = new RequestWithUser {
-                RequestId = reader.GetInt32("RequestId"),
-                LearnerId = reader.GetInt32("LearnerId"),
-                SkillName = reader.GetString("SkillName"),
-                Topic = reader.IsDBNull(reader.GetOrdinal("Topic")) ? null : reader.GetString("Topic"),
-                Status = reader.GetString("Status"),
-                CreatedAt = reader.GetDateTime("CreatedAt"),
-                Description = reader.IsDBNull(reader.GetOrdinal("Description")) ? null : reader.GetString("Description"),
-                FullName = reader.GetString("FullName"),
-                Email = reader.GetString("Email")
-            };
-        }
-        return data;
-    }
-
-    //GET all request by learnerId with user info
-    public List<RequestWithUser> GetByLearnerId(int learnerId){
-        var list = new List<RequestWithUser>();
-        using var conn = _dbHelper.GetConnection();
-        conn.Open();
-        using var cmd = new MySqlCommand(
-            "SELECT r.*, u.FullName, u.Email FROM Requests r JOIN Users u ON r.LearnerId = u.UserId WHERE r.LearnerId = @learnerId", 
-            conn
-        );
-        cmd.Parameters.AddWithValue("@learnerId",learnerId);
-        using var reader = cmd.ExecuteReader();
-        while(reader.Read()){
-            list.Add(
-                new RequestWithUser
-                {
-                    RequestId = reader.GetInt32("RequestId"),
-                    LearnerId = reader.GetInt32("LearnerId"),
-                    SkillName = reader.GetString("SkillName"),
-                    Topic = reader.IsDBNull(reader.GetOrdinal("Topic")) ? null : reader.GetString("Topic"),
-                    Status = reader.GetString("Status"),
-                    CreatedAt = reader.GetDateTime("CreatedAt"),
-                    Description = reader.IsDBNull(reader.GetOrdinal("Description")) ? null : reader.GetString("Description"),
-                    FullName = reader.GetString("FullName"),
-                    Email = reader.GetString("Email")
-                }
-            );
-        }
-        return list;
-    }
-
-    //GET all requests with user info
-    public List<RequestWithUser> GetAllRequests(){
-        var list = new List<RequestWithUser>();
-        using var conn = _dbHelper.GetConnection();
-        conn.Open();
-        using var cmd = new MySqlCommand(
-            "SELECT r.*, u.FullName, u.Email FROM Requests r JOIN Users u ON r.LearnerId = u.UserId ORDER BY r.CreatedAt DESC, r.RequestId DESC", 
-            conn
-        );
-        using var reader = cmd.ExecuteReader();
-        while(reader.Read()){
-            list.Add(
-                new RequestWithUser
-                {
-                    RequestId = reader.GetInt32("RequestId"),
-                    LearnerId = reader.GetInt32("LearnerId"),
-                    SkillName = reader.GetString("SkillName"),
-                    Topic = reader.IsDBNull(reader.GetOrdinal("Topic")) ? null : reader.GetString("Topic"),
-                    Status = reader.GetString("Status"),
-                    CreatedAt = reader.GetDateTime("CreatedAt"),
-                    Description = reader.IsDBNull(reader.GetOrdinal("Description")) ? null : reader.GetString("Description"),
-                    FullName = reader.GetString("FullName"),
-                    Email = reader.GetString("Email")
-                }
-            );
-        }
-        return list;
-    }
-
-    // POST create request
-    public void AddRequest(Request req)
+    public RequestService(IRequestRepository repo)
     {
-        using var conn = _dbHelper.GetConnection();
-        conn.Open();
-        var cmd = new MySqlCommand(
-            "INSERT INTO Requests (LearnerId, SkillName, Topic, Description) VALUES (@learnerId, @skillName, @topic, @description)", 
-            conn
-        );
-        cmd.Parameters.AddWithValue("@learnerId", req.LearnerId);
-        cmd.Parameters.AddWithValue("@skillName", req.SkillName);
-        cmd.Parameters.AddWithValue("@topic", req.Topic);
-        cmd.Parameters.AddWithValue("@description", req.Description);
-        cmd.ExecuteNonQuery();
+        _repo = repo;
     }
 
-    // PUT update entire request
-    public void UpdateRequest(int requestId, Request req)
-    {
-        using var conn = _dbHelper.GetConnection();
-        conn.Open();
-        var cmd = new MySqlCommand(
-            "UPDATE Requests SET SkillName=@skillName, Topic=@topic, Description=@description WHERE RequestId=@id", 
-            conn
-        );
-        cmd.Parameters.AddWithValue("@skillName", req.SkillName);
-        cmd.Parameters.AddWithValue("@topic", (object)req.Topic ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@description", (object)req.Description ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@id", requestId);
-        cmd.ExecuteNonQuery();
-    }
+    public RequestWithUser? GetById(int requestId) => _repo.GetByIdWithUser(requestId);
 
-    // PATCH update status only
-    public void UpdateStatus(int requestId, string status)
-    {
-        using var conn = _dbHelper.GetConnection();
-        conn.Open();
-        var cmd = new MySqlCommand(
-            "UPDATE Requests SET Status=@status WHERE RequestId=@id", 
-            conn
-        );
-        cmd.Parameters.AddWithValue("@status", status);
-        cmd.Parameters.AddWithValue("@id", requestId);
-        cmd.ExecuteNonQuery();
-    }
+    public List<RequestWithUser> GetByLearnerId(int learnerId) => _repo.GetByLearnerIdWithUser(learnerId);
 
-    // DELETE request
-    public void DeleteRequest(int requestId)
-    {
-        using var conn = _dbHelper.GetConnection();
-        conn.Open();
-        var cmd = new MySqlCommand("DELETE FROM Requests WHERE RequestId=@id", conn);
-        cmd.Parameters.AddWithValue("@id", requestId);
-        cmd.ExecuteNonQuery();
-    }
+    public List<RequestWithUser> GetAllRequests() => _repo.GetAllWithUser();
 
-    // Search requests by skill, topic, or user name
-    public List<RequestWithUser> SearchRequests(string query)
-    {
-        var list = new List<RequestWithUser>();
-        using var conn = _dbHelper.GetConnection();
-        conn.Open();
-        
-        var sql = @"
-            SELECT r.*, u.FullName, u.Email 
-            FROM Requests r 
-            JOIN Users u ON r.LearnerId = u.UserId 
-            WHERE r.SkillName LIKE @query 
-               OR r.Topic LIKE @query 
-               OR r.Description LIKE @query 
-               OR u.FullName LIKE @query 
-            ORDER BY r.CreatedAt DESC, r.RequestId DESC";
-            
-        using var cmd = new MySqlCommand(sql, conn);
-        cmd.Parameters.AddWithValue("@query", $"%{query}%");
-        
-        using var reader = cmd.ExecuteReader();
-        while(reader.Read()){
-            list.Add(
-                new RequestWithUser
-                {
-                    RequestId = reader.GetInt32("RequestId"),
-                    LearnerId = reader.GetInt32("LearnerId"),
-                    SkillName = reader.GetString("SkillName"),
-                    Topic = reader.IsDBNull(reader.GetOrdinal("Topic")) ? null : reader.GetString("Topic"),
-                    Status = reader.GetString("Status"),
-                    CreatedAt = reader.GetDateTime("CreatedAt"),
-                    Description = reader.IsDBNull(reader.GetOrdinal("Description")) ? null : reader.GetString("Description"),
-                    FullName = reader.GetString("FullName"),
-                    Email = reader.GetString("Email")
-                }
-            );
-        }
-        return list;
-    }
+    public void AddRequest(Request req) => _repo.Insert(req);
+
+    public void UpdateRequest(int requestId, Request req) => _repo.Update(requestId, req);
+
+    public void UpdateStatus(int requestId, string status) => _repo.UpdateStatus(requestId, status);
+
+    public void DeleteRequest(int requestId) => _repo.Delete(requestId);
+
+    public List<RequestWithUser> SearchRequests(string query) => _repo.SearchWithUser(query);
 }

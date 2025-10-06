@@ -1,19 +1,16 @@
-using MySql.Data.MySqlClient;
-using System.Data;
+using Microsoft.Data.SqlClient;
 
-public class DbHelper
+namespace SkillLink.API.Data
 {
-    private readonly IConfiguration _config;
-    private readonly string _connectionString;
-
-    public DbHelper(IConfiguration config)
+    public class DbHelper
     {
-        _config = config;
-        _connectionString = _config.GetConnectionString("DefaultConnection");
-    }
+        private readonly string _connectionString;
 
-    public MySqlConnection GetConnection()
-    {
-        return new MySqlConnection(_connectionString);
+        public DbHelper(IConfiguration config)
+        {
+            _connectionString = config.GetConnectionString("DefaultConnection")!;
+        }
+
+        public SqlConnection GetConnection() => new SqlConnection(_connectionString);
     }
 }

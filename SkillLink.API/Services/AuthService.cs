@@ -1,5 +1,4 @@
 using SkillLink.API.Models;
-using MySql.Data.MySqlClient;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.IdentityModel.Tokens;
@@ -7,20 +6,21 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Net;
 using SkillLink.API.Services.Abstractions;
+using SkillLink.API.Repositories.Abstractions;
 
 namespace SkillLink.API.Services
 {
-    public class AuthService : IAuthService // ✅ implement interface
+    public class AuthService : IAuthService
     {
-        private readonly DbHelper _dbHelper;
         private readonly IConfiguration _config;
         private readonly EmailService _email;
+        private readonly IAuthRepository _repo;
 
-        public AuthService(DbHelper dbHelper, IConfiguration config, EmailService email)
+        public AuthService(IConfiguration config, EmailService email, IAuthRepository repo)
         {
-            _dbHelper = dbHelper;
             _config = config;
             _email = email;
+            _repo = repo;
         }
 
         // ------------------- Current User -------------------
@@ -36,9 +36,8 @@ namespace SkillLink.API.Services
             if (!int.TryParse(id, out int userId))
                 return null;
 
-            var dbUser = GetUserById(userId);
-            if (dbUser == null)
-                return null;
+            var dbUser = _repo.GetUserById(userId);
+            if (dbUser == null) return null;
 
             return new User
             {
@@ -47,33 +46,6 @@ namespace SkillLink.API.Services
                 Email = dbUser.Email,
                 Role = dbUser.Role
             };
-        }
-
-        // ------------------- Get User by Id -------------------
-        public User? GetUserById(int id)
-        {
-            User? data = null;
-            using var conn = _dbHelper.GetConnection();
-            conn.Open();
-            using var cmd = new MySqlCommand("SELECT * FROM Users WHERE UserId = @userId", conn);
-            cmd.Parameters.AddWithValue("@userId", id);
-            using var reader = cmd.ExecuteReader();
-            if (reader.Read())
-            {
-                data = new User
-                {
-                    UserId = reader.GetInt32("UserId"),
-                    FullName = reader.GetString("FullName"),
-                    Email = reader.GetString("Email"),
-                    PasswordHash = reader.IsDBNull(reader.GetOrdinal("PasswordHash")) ? "" : reader.GetString("PasswordHash"),
-                    Role = reader.GetString("Role"),
-                    CreatedAt = reader.GetDateTime("CreatedAt"),
-                    Bio = reader.IsDBNull(reader.GetOrdinal("Bio")) ? null : reader.GetString("Bio"),
-                    Location = reader.IsDBNull(reader.GetOrdinal("Location")) ? null : reader.GetString("Location"),
-                    ProfilePicture = reader.IsDBNull(reader.GetOrdinal("ProfilePicture")) ? null : reader.GetString("ProfilePicture")
-                };
-            }
-            return data;
         }
 
         // ------------------- Utilities -------------------
@@ -121,7 +93,6 @@ namespace SkillLink.API.Services
                         .Replace("=", "");
         }
 
-        // Simple disposable list
         private static readonly HashSet<string> DisposableDomains = new(StringComparer.OrdinalIgnoreCase)
         {
             "mailinator.com", "tempmail.com", "10minutemail.com", "guerrillamail.com",
@@ -140,6 +111,9 @@ namespace SkillLink.API.Services
             catch { return true; }
         }
 
+        // ------------------- Get User by Id -------------------
+        public User? GetUserById(int id) => _repo.GetUserById(id);
+
         // ------------------- Register -------------------
         public void Register(RegisterRequest req)
         {
@@ -153,36 +127,16 @@ namespace SkillLink.API.Services
             if (IsDisposableEmail(req.Email))
                 throw new InvalidOperationException("Disposable or temporary emails are not allowed.");
 
-            using var conn = _dbHelper.GetConnection();
-            conn.Open();
-
-            using (var check = new MySqlCommand("SELECT COUNT(*) FROM Users WHERE Email=@e", conn))
-            {
-                check.Parameters.AddWithValue("@e", req.Email);
-                var count = Convert.ToInt32(check.ExecuteScalar());
-                if (count > 0) throw new InvalidOperationException("Email already exists.");
-            }
+            if (_repo.EmailExists(req.Email))
+                throw new InvalidOperationException("Email already exists.");
 
             var token = CreateToken();
             var expires = DateTime.UtcNow.AddHours(24);
+            var hash = HashPassword(req.Password);
 
-            using var cmd = new MySqlCommand(
-                @"INSERT INTO Users 
-                  (FullName, Email, PasswordHash, Role, ProfilePicture, CreatedAt, 
-                   IsActive, ReadyToTeach, EmailVerified, EmailVerificationToken, EmailVerificationExpires)
-                  VALUES (@FullName, @Email, @PasswordHash, @Role, @ProfilePicture, NOW(), 
-                          1, 0, 0, @Token, @Expires)", conn);
+            var newUserId = _repo.CreateUser(req, hash, token, expires);
 
-            cmd.Parameters.AddWithValue("@FullName", req.FullName);
-            cmd.Parameters.AddWithValue("@Email", req.Email);
-            cmd.Parameters.AddWithValue("@PasswordHash", HashPassword(req.Password));
-            cmd.Parameters.AddWithValue("@Role", string.IsNullOrWhiteSpace(req.Role) ? "Learner" : req.Role);
-            cmd.Parameters.AddWithValue("@ProfilePicture", (object?)req.ProfilePicturePath ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@Token", token);
-            cmd.Parameters.AddWithValue("@Expires", expires);
-
-            cmd.ExecuteNonQuery();
-
+            // Fire & forget email (do not fail registration if email fails)
             try
             {
                 var apiBase = _config["Api:BaseUrl"] ?? "http://localhost:5159";
@@ -206,115 +160,31 @@ namespace SkillLink.API.Services
         // ------------------- Verify Email -------------------
         public bool VerifyEmailByToken(string token)
         {
-            using var conn = _dbHelper.GetConnection();
-            conn.Open();
-
-            int? userId = null;
-            DateTime expires;
-
-            using (var get = new MySqlCommand(
-                @"SELECT UserId, EmailVerificationExpires 
-                  FROM Users 
-                  WHERE EmailVerificationToken=@t AND EmailVerified=0", conn))
-            {
-                get.Parameters.AddWithValue("@t", token);
-                using var r = get.ExecuteReader();
-                if (!r.Read()) return false;
-
-                userId = r.GetInt32("UserId");
-                expires = r.GetDateTime("EmailVerificationExpires");
-            }
-
-            if (expires < DateTime.UtcNow) return false;
-            if (userId is null) return false;
-
-            using var upd = new MySqlCommand(
-                @"UPDATE Users 
-                  SET EmailVerified=1, EmailVerificationToken=NULL, EmailVerificationExpires=NULL
-                  WHERE UserId=@id", conn);
-            upd.Parameters.AddWithValue("@id", userId.Value);
-            return upd.ExecuteNonQuery() > 0;
+            var ok = _repo.VerifyEmailByToken(token, out _);
+            return ok;
         }
 
         // ------------------- Login -------------------
         public string? Login(LoginRequest req)
         {
-            using var conn = _dbHelper.GetConnection();
-            conn.Open();
+            var dbUser = _repo.GetUserByEmail(req.Email);
+            if (dbUser == null) return null;
 
-            using var cmd = new MySqlCommand("SELECT * FROM Users WHERE Email=@e", conn);
-            cmd.Parameters.AddWithValue("@e", req.Email);
+            if (!dbUser.IsActive || !dbUser.EmailVerified) return null;
 
-            using var reader = cmd.ExecuteReader();
-            if (!reader.Read()) return null;
+            if (!VerifyPassword(req.Password, dbUser.PasswordHash ?? "")) return null;
 
-            var isActive = reader.GetBoolean(reader.GetOrdinal("IsActive"));
-            var isVerified = reader.GetBoolean(reader.GetOrdinal("EmailVerified"));
-            if (!isActive || !isVerified) return null;
-
-            var user = new User
-            {
-                UserId = reader.GetInt32("UserId"),
-                FullName = reader.GetString("FullName"),
-                Email = reader.GetString("Email"),
-                PasswordHash = reader.GetString("PasswordHash"),
-                Role = reader.GetString("Role"),
-                ReadyToTeach = reader.GetBoolean(reader.GetOrdinal("ReadyToTeach")),
-                EmailVerified = isVerified
-            };
-
-            if (!VerifyPassword(req.Password, user.PasswordHash)) return null;
-            return GenerateJwtToken(user);
+            return GenerateJwtToken(dbUser);
         }
 
         // ------------------- Profile -------------------
-        public User? GetUserProfile(int userId)
-        {
-            using var conn = _dbHelper.GetConnection();
-            conn.Open();
-
-            using var cmd = new MySqlCommand(
-                @"SELECT UserId, FullName, Email, Role, CreatedAt, Bio, Location, 
-                         ProfilePicture, ReadyToTeach, IsActive, EmailVerified
-                  FROM Users WHERE UserId=@userId", conn);
-            cmd.Parameters.AddWithValue("@userId", userId);
-
-            using var reader = cmd.ExecuteReader();
-            if (!reader.Read()) return null;
-
-            return new User
-            {
-                UserId = reader.GetInt32("UserId"),
-                FullName = reader.GetString("FullName"),
-                Email = reader.GetString("Email"),
-                Role = reader.GetString("Role"),
-                CreatedAt = reader.GetDateTime("CreatedAt"),
-                Bio = reader.IsDBNull(reader.GetOrdinal("Bio")) ? null : reader.GetString("Bio"),
-                Location = reader.IsDBNull(reader.GetOrdinal("Location")) ? null : reader.GetString("Location"),
-                ProfilePicture = reader.IsDBNull(reader.GetOrdinal("ProfilePicture")) ? null : reader.GetString("ProfilePicture"),
-                ReadyToTeach = reader.GetBoolean(reader.GetOrdinal("ReadyToTeach")),
-                IsActive = reader.GetBoolean(reader.GetOrdinal("IsActive")),
-                EmailVerified = reader.GetBoolean(reader.GetOrdinal("EmailVerified"))
-            };
-        }
+        public User? GetUserProfile(int userId) => _repo.GetProfile(userId);
 
         public bool UpdateUserProfile(int userId, UpdateProfileRequest request)
         {
             try
             {
-                using var conn = _dbHelper.GetConnection();
-                conn.Open();
-                using var cmd = new MySqlCommand(
-                    @"UPDATE Users 
-                      SET FullName=@fullName, Bio=@bio, Location=@location 
-                      WHERE UserId=@userId", conn);
-
-                cmd.Parameters.AddWithValue("@fullName", request.FullName);
-                cmd.Parameters.AddWithValue("@bio", (object?)request.Bio ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("@location", (object?)request.Location ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("@userId", userId);
-
-                return cmd.ExecuteNonQuery() > 0;
+                return _repo.UpdateProfile(userId, request.FullName, request.Bio, request.Location);
             }
             catch (Exception ex)
             {
@@ -325,83 +195,14 @@ namespace SkillLink.API.Services
 
         public bool UpdateTeachMode(int userId, bool readyToTeach)
         {
-            using var conn = _dbHelper.GetConnection();
-            conn.Open();
-
-            using var cmd = new MySqlCommand(
-                @"UPDATE Users 
-                  SET ReadyToTeach=@r, Role=@role 
-                  WHERE UserId=@id", conn);
-
-            cmd.Parameters.AddWithValue("@r", readyToTeach ? 1 : 0);
-            cmd.Parameters.AddWithValue("@role", readyToTeach ? "Tutor" : "Learner");
-            cmd.Parameters.AddWithValue("@id", userId);
-
-            return cmd.ExecuteNonQuery() > 0;
+            var role = readyToTeach ? "Tutor" : "Learner";
+            return _repo.UpdateTeachMode(userId, readyToTeach, role);
         }
 
-        public bool SetActive(int userId, bool isActive)
-        {
-            using var conn = _dbHelper.GetConnection();
-            conn.Open();
+        public bool SetActive(int userId, bool isActive) => _repo.SetActive(userId, isActive);
 
-            using var cmd = new MySqlCommand(
-                @"UPDATE Users 
-                  SET IsActive=@isActive 
-                  WHERE UserId=@id", conn);
+        public void DeleteUserFromDB(int id) => _repo.DeleteUserWithRules(id);
 
-            cmd.Parameters.AddWithValue("@isActive", isActive ? 1 : 0);
-            cmd.Parameters.AddWithValue("@id", userId);
-
-            return cmd.ExecuteNonQuery() > 0;
-        }
-
-        public void DeleteUserFromDB(int id)
-        {
-            using var conn = _dbHelper.GetConnection();
-            conn.Open();
-
-            using var tx = conn.BeginTransaction();
-
-            string? role = null;
-            using (var get = new MySqlCommand("SELECT Role FROM Users WHERE UserId=@id FOR UPDATE", conn, tx))
-            {
-                get.Parameters.AddWithValue("@id", id);
-                using var r = get.ExecuteReader();
-                if (!r.Read())
-                    throw new KeyNotFoundException("User not found.");
-
-                role = r.GetString("Role");
-            }
-
-            if (string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase))
-            {
-                using var c = new MySqlCommand("SELECT COUNT(*) FROM Users WHERE Role='Admin'", conn, tx);
-                var adminCount = Convert.ToInt32(c.ExecuteScalar());
-                if (adminCount <= 1)
-                    throw new InvalidOperationException("Cannot delete the last admin.");
-            }
-
-            using (var cmd = new MySqlCommand("DELETE FROM Users WHERE UserId = @id", conn, tx))
-            {
-                cmd.Parameters.AddWithValue("@id", id);
-                var affected = cmd.ExecuteNonQuery();
-                if (affected == 0)
-                    throw new KeyNotFoundException("User not found.");
-            }
-
-            tx.Commit();
-        }
-        
-        public bool UpdateProfilePicture(int userId, string? path)
-        {
-            using var conn = _dbHelper.GetConnection();
-            conn.Open();
-            using var cmd = new MySqlCommand(
-                "UPDATE Users SET ProfilePicture=@p WHERE UserId=@id", conn);
-            cmd.Parameters.AddWithValue("@p", (object?)path ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@id", userId);
-            return cmd.ExecuteNonQuery() > 0;
-        }
+        public bool UpdateProfilePicture(int userId, string? path) => _repo.UpdateProfilePicture(userId, path);
     }
 }
