@@ -5,7 +5,7 @@ import React from "react";
 const cn = (...classes) => classes.filter(Boolean).join(" ");
 
 /* ========= Glass surfaces ========= */
-export const GlassCard = ({ className = "", children, as: Tag = "div", ...props }) => (
+export const GlassCard = ({ className = "", onClick, children, as: Tag = "div", ...props }) => (
   <Tag
     {...props}
     className={cn(
@@ -14,6 +14,7 @@ export const GlassCard = ({ className = "", children, as: Tag = "div", ...props 
       "bg-white/70 dark:bg-slate-900/60",
       className
     )}
+    onClick={onClick}
   >
     {children}
   </Tag>

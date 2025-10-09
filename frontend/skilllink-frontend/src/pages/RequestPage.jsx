@@ -1,8 +1,7 @@
 // src/pages/RequestsPage.jsx
 import React, { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-// import api from "../api/axios";
 import Dock from "../components/Dock";
 import { requestsApi, tutorPostsApi } from "../api";
 import { toImageUrl } from "../utils/image";
@@ -20,6 +19,14 @@ const GlassCard = ({ className = "", children }) => (
     {children}
   </div>
 );
+
+const chipClassFor = (s) =>
+  ({
+    Open: "bg-emerald-200/70 text-emerald-900 dark:bg-emerald-400/20 dark:text-emerald-200",
+    Closed: "bg-slate-200/70 text-slate-900 dark:bg-slate-700/30 dark:text-slate-200",
+    Scheduled: "bg-blue-200/70 text-blue-900 dark:bg-blue-400/20 dark:text-blue-200",
+    Completed: "bg-emerald-200/70 text-emerald-900 dark:bg-emerald-400/20 dark:text-emerald-200",
+  }[s] || "");
 
 const GlassBar = ({ className = "", children }) => (
   <div
@@ -87,6 +94,18 @@ const Chip = ({ children, className = "" }) => (
   </span>
 );
 
+/* choose the best accepted row per request (prefer SCHEDULED, else latest) */
+const pickBetterAccepted = (curr, cand) => {
+  if (!curr) return cand;
+  const s1 = (curr.status || "").toUpperCase() === "SCHEDULED";
+  const s2 = (cand.status || "").toUpperCase() === "SCHEDULED";
+  if (s2 && !s1) return cand;
+  if (!s2 && s1) return curr;
+  const a1 = curr.acceptedAt ? new Date(curr.acceptedAt).getTime() : 0;
+  const a2 = cand.acceptedAt ? new Date(cand.acceptedAt).getTime() : 0;
+  return a2 >= a1 ? cand : curr;
+};
+
 /* ========================== Utils ========================== */
 const statusStyles = {
   PENDING:
@@ -97,13 +116,6 @@ const statusStyles = {
     "bg-emerald-200/70 text-emerald-900 dark:bg-emerald-400/20 dark:text-emerald-200",
   CANCELLED:
     "bg-red-200/70 text-red-900 dark:bg-red-400/20 dark:text-red-200",
-
-  // Tutor Posts
-  Open: "bg-blue-200/70 text-blue-900 dark:bg-blue-400/20 dark:text-blue-200",
-  Closed:
-    "bg-slate-200/70 text-slate-900 dark:bg-slate-400/20 dark:text-slate-200",
-  Scheduled:
-    "bg-amber-200/70 text-amber-900 dark:bg-amber-400/20 dark:text-amber-200",
 };
 
 const debounce = (fn, delay = 300) => {
@@ -150,17 +162,20 @@ const SkeletonCard = () => (
 /* ========================== Requests Pane ========================== */
 const RequestsPane = () => {
   const { user } = useAuth();
-  const [requests, setRequests] = useState([]);
+  const [searchParams] = useSearchParams();
+  const focusId = searchParams.get("focus");
+
+  const [allRequests, setAllRequests] = useState([]);
   const [acceptedRequests, setAcceptedRequests] = useState([]);
 
-  const [tab, setTab] = useState("ALL"); // ALL | MINE | ACCEPTED
+  const [tab, setTab] = useState("TO_ME"); // TO_ME | MINE | ACCEPTED
   const [sortBy, setSortBy] = useState("NEWEST"); // NEWEST | OLDEST
   const [searchQuery, setSearchQuery] = useState("");
   const [liveQuery, setLiveQuery] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState("");
 
-  // modals/forms
+  // Create / Edit modals
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingRequest, setEditingRequest] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -171,20 +186,66 @@ const RequestsPane = () => {
     learnerId: null,
   });
 
+  // Schedule modal
+  const [showSched, setShowSched] = useState(false);
+  const [schedBusy, setSchedBusy] = useState(false);
+  const [schedTarget, setSchedTarget] = useState(null); // accepted record
+  const [schedForm, setSchedForm] = useState({
+    scheduleDate: "",
+    meetingType: "ONLINE",
+    meetingLink: "",
+  });
+
+  // Tick state (so Finish can appear automatically once time passes)
+  const [, setNowTick] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 30000); // 30s
+    return () => clearInterval(id);
+  }, []);
+
+  // Maps for quick lookups
+  const acceptedByRequest = useMemo(() => {
+    const m = {};
+    for (const ar of acceptedRequests) {
+      m[ar.requestId] = pickBetterAccepted(m[ar.requestId], ar);
+    }
+    return m;
+  }, [acceptedRequests]);
+
+  const acceptedMap = useMemo(() => {
+    const m = {};
+    Object.keys(acceptedByRequest).forEach((rid) => (m[rid] = true));
+    return m;
+  }, [acceptedByRequest]);
+
+  useEffect(() => {
+    const run = debounce((q) => setSearchQuery(q), 350);
+    run(liveQuery);
+  }, [liveQuery]);
+
   useEffect(() => {
     loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const isDirectedToMe = (r) => {
+    const uid = `${user?.userId ?? ""}`;
+    return r?.preferredTutorId != null && `${r.preferredTutorId}` === uid;
+  };
+
   const loadAll = async () => {
     try {
       setIsLoading(true);
-      const [reqRes, accRes] = await Promise.all([
+      setMessage("");
+
+      const [allRes, accByMeRes, accForMeRes] = await Promise.all([
         requestsApi.list(),
         requestsApi.listAcceptedByMe(),
+        requestsApi.listAcceptedForMyRequests(),
       ]);
-      setRequests(reqRes.data || []);
-      setAcceptedRequests(accRes.data || []);
+
+      setAllRequests(allRes.data || []);
+      setAcceptedRequests([...(accByMeRes.data || []), ...(accForMeRes.data || [])]);
     } catch {
       setMessage("Failed to load requests");
     } finally {
@@ -192,25 +253,12 @@ const RequestsPane = () => {
     }
   };
 
-  // fast lookup for accepted
-  const acceptedMap = useMemo(() => {
-    const m = {};
-    for (const ar of acceptedRequests) m[ar.requestId] = true;
-    return m;
-  }, [acceptedRequests]);
-
-  // debounced live search save
-  useEffect(() => {
-    const run = debounce((q) => setSearchQuery(q), 350);
-    run(liveQuery);
-  }, [liveQuery]);
-
-  // derived list
   const filteredSorted = useMemo(() => {
-    let list = [...requests];
+    let list = [...allRequests];
 
-    if (tab === "MINE") list = list.filter((r) => r.learnerId === user?.userId);
-    if (tab === "ACCEPTED") list = list.filter((r) => acceptedMap[r.requestId]);
+    if (tab === "TO_ME") list = list.filter(isDirectedToMe);
+    else if (tab === "MINE") list = list.filter((r) => r.learnerId === user?.userId);
+    else if (tab === "ACCEPTED") list = list.filter((r) => acceptedMap[r.requestId]);
 
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -230,21 +278,115 @@ const RequestsPane = () => {
     );
 
     return list;
-  }, [requests, tab, acceptedMap, searchQuery, sortBy, user?.userId]);
+  }, [allRequests, tab, acceptedMap, searchQuery, sortBy, user?.userId]);
 
   // actions
   const acceptRequest = async (requestId) => {
     try {
       setMessage("");
-      if (!acceptedMap[requestId]) {
-        setAcceptedRequests((prev) => [...prev, { requestId, status: "PENDING" }]);
-      }
       await requestsApi.accept(requestId);
       setMessage("Request accepted successfully!");
-      const acc = await requestsApi.listAcceptedByMe();
-      setAcceptedRequests(acc.data || []);
+      await loadAll();
     } catch {
       setMessage("Failed to accept request");
+    }
+  };
+
+  const declineDirected = async (requestId) => {
+    if (!window.confirm("Decline this directed request?")) return;
+    try {
+      setMessage("");
+      await requestsApi.declineDirected(requestId);
+      setMessage("Request declined (the requester now sees it as CANCELLED).");
+      await loadAll();
+    } catch {
+      setMessage("Failed to decline request");
+    }
+  };
+
+  const openSchedule = (acceptedRecord) => {
+    setSchedTarget(acceptedRecord);
+    const initialDate =
+      acceptedRecord?.scheduleDate
+        ? formatDateTimeLocal(acceptedRecord.scheduleDate)
+        : formatDateTimeLocal(new Date());
+    setSchedForm({
+      scheduleDate: initialDate,
+      meetingType: acceptedRecord?.meetingType || "ONLINE",
+      meetingLink: acceptedRecord?.meetingLink || "",
+    });
+    setShowSched(true);
+  };
+
+  const doSchedule = async (e) => {
+    e.preventDefault();
+    if (!schedTarget) return;
+    try {
+      setSchedBusy(true);
+
+      await requestsApi.scheduleAccepted(`${schedTarget.acceptedRequestId}`, {
+        scheduleDate: new Date(schedForm.scheduleDate).toISOString(),
+        meetingType: schedForm.meetingType,
+        meetingLink: schedForm.meetingType === "ONLINE" ? schedForm.meetingLink : "",
+      });
+
+      // optimistic update
+      setAcceptedRequests((prev) =>
+        prev.map((ar) =>
+          ar.acceptedRequestId === schedTarget.acceptedRequestId
+            ? {
+                ...ar,
+                status: "SCHEDULED",
+                scheduleDate: new Date(schedForm.scheduleDate).toISOString(),
+                meetingType: schedForm.meetingType,
+                meetingLink:
+                  schedForm.meetingType === "ONLINE" ? schedForm.meetingLink : "",
+              }
+            : ar
+        )
+      );
+      setAllRequests((prev) =>
+        prev.map((r) =>
+          r.requestId === schedTarget.requestId ? { ...r, status: "SCHEDULED" } : r
+        )
+      );
+
+      setMessage("Meeting scheduled successfully!");
+      setShowSched(false);
+      setSchedTarget(null);
+      await loadAll();
+    } catch {
+      setMessage("Failed to schedule meeting");
+    } finally {
+      setSchedBusy(false);
+    }
+  };
+
+  // Finish (Requests)
+  const finishAccepted = async (acceptedRecord) => {
+    try {
+      setMessage("");
+      await requestsApi.finishAccepted(acceptedRecord.acceptedRequestId);
+
+      setAcceptedRequests((prev) =>
+        prev.map((ar) =>
+          ar.acceptedRequestId === acceptedRecord.acceptedRequestId
+            ? { ...ar, status: "COMPLETED" }
+            : ar
+        )
+      );
+      setAllRequests((prev) =>
+        prev.map((r) =>
+          r.requestId === acceptedRecord.requestId
+            ? { ...r, status: "COMPLETED" }
+            : r
+        )
+      );
+
+      setMessage("Marked as completed.");
+      await loadAll();
+    } catch {
+      setMessage("Failed to mark as completed");
     }
   };
 
@@ -259,15 +401,15 @@ const RequestsPane = () => {
     try {
       setIsSubmitting(true);
       await requestsApi.create({
-             skillName: formData.skillName,
-             topic: formData.topic,
-             description: formData.description,
-             learnerId: user.userId,
-     });
+        skillName: formData.skillName,
+        topic: formData.topic,
+        description: formData.description,
+        learnerId: user.userId,
+      });
       setMessage("Request created successfully!");
       setShowCreateModal(false);
       setFormData({ skillName: "", topic: "", description: "" });
-      loadAll();
+      await loadAll();
       setTab("MINE");
     } catch {
       setMessage("Failed to create request");
@@ -297,7 +439,7 @@ const RequestsPane = () => {
       await requestsApi.update(editingRequest.requestId, { ...formData });
       setMessage("Request updated successfully!");
       cancelEditing();
-      loadAll();
+      await loadAll();
     } catch {
       setMessage("Failed to update request");
     } finally {
@@ -306,13 +448,35 @@ const RequestsPane = () => {
   };
 
   const deleteRequest = async (requestId) => {
-    if (!window.confirm("Are you sure you want to delete this request?")) return;
+    if (!window.confirm("Cancel this request for both sides?")) return;
     try {
-      await requestsApi.remove(requestId);
-      setMessage("Request deleted successfully!");
-      loadAll();
+      setMessage("");
+      if (typeof requestsApi.cancel === "function") {
+        await requestsApi.cancel(requestId);
+      } else if (typeof requestsApi.updateStatus === "function") {
+        await requestsApi.updateStatus(requestId, "CANCELLED");
+      } else {
+        await requestsApi.update(requestId, { status: "CANCELLED" });
+      }
+      setAllRequests((prev) =>
+        prev.map((r) => (r.requestId === requestId ? { ...r, status: "CANCELLED" } : r))
+      );
+      setMessage("Request cancelled.");
+      await loadAll();
     } catch {
-      setMessage("Failed to delete request");
+      setMessage("Failed to cancel request");
+    }
+  };
+
+  const removeRequestPermanently = async (requestId) => {
+    if (!window.confirm("Permanently remove this cancelled request?")) return;
+    try {
+      setMessage("");
+      await requestsApi.remove(requestId);
+      setMessage("Request removed.");
+      await loadAll();
+    } catch {
+      setMessage("Failed to remove request");
     }
   };
 
@@ -324,7 +488,7 @@ const RequestsPane = () => {
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
             {/* Tabs */}
             <div className="inline-flex bg-white/60 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl p-1">
-              {["ALL", "MINE", "ACCEPTED"].map((t) => (
+              {["TO_ME", "MINE", "ACCEPTED"].map((t) => (
                 <button
                   key={t}
                   onClick={() => setTab(t)}
@@ -335,7 +499,7 @@ const RequestsPane = () => {
                       : "text-slate-700 dark:text-slate-300 hover:bg-white/70 dark:hover:bg-slate-700/60")
                   }
                 >
-                  {t === "ALL" ? "All" : t === "MINE" ? "My Requests" : "Accepted by Me"}
+                  {t === "TO_ME" ? "To me" : t === "MINE" ? "My Requests" : "Accepted / Scheduled"}
                 </button>
               ))}
             </div>
@@ -401,40 +565,79 @@ const RequestsPane = () => {
               <GlassCard className="p-10 text-center">
                 <EmptyIllustration />
                 <p className="mt-4 text-slate-600 dark:text-slate-300">
-                  {searchQuery || tab !== "ALL"
+                  {searchQuery || tab !== "TO_ME"
                     ? "No requests match your filters."
-                    : "No requests yet. Be the first to create one!"}
+                    : "No requests directed to you yet."}
                 </p>
-                {tab !== "ALL" && (
-                  <MacButton onClick={() => setTab("ALL")} className="mt-4">
-                    Reset filters
+                {tab !== "TO_ME" && (
+                  <MacButton onClick={() => setTab("TO_ME")} className="mt-4">
+                    Show requests to me
                   </MacButton>
                 )}
               </GlassCard>
             ) : (
               <div className="grid md:grid-cols-2 gap-5">
                 {filteredSorted.map((request) => {
-                  const accepted = !!acceptedMap[request.requestId];
+                  const acceptedRec = acceptedByRequest[request.requestId];
+                  const accepted = !!acceptedRec;
                   const isOwner = user.userId === request.learnerId;
+                  const directedToMe = isDirectedToMe(request);
+                  const highlight = focusId && `${request.requestId}` === `${focusId}`;
+                  const isSched = (acceptedRec?.status || "").toUpperCase() === "SCHEDULED";
 
                   return (
-                    <GlassCard key={request.requestId} className="p-6">
+                    <GlassCard
+                      key={request.requestId}
+                      className={"p-6 " + (highlight ? "ring-2 ring-blue-400" : "")}
+                    >
                       <div className="flex justify-between items-start">
                         <div>
                           <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
                             {request.skillName}
                           </h2>
                           {request.topic && (
-                            <p className="text-slate-600 dark:text-slate-300 mt-1">{request.topic}</p>
+                            <p className="text-slate-600 dark:text-slate-300 mt-1">
+                              {request.topic}
+                            </p>
                           )}
                         </div>
-                        <Chip className={statusStyles[request.status] || ""}>{request.status}</Chip>
+                        <Chip className={statusStyles[request.status] || ""}>
+                          {request.status}
+                        </Chip>
                       </div>
 
                       {request.description && (
                         <p className="text-slate-700 dark:text-slate-200 mt-3">
                           {request.description}
                         </p>
+                      )}
+
+                      {/* Scheduled summary — BOTH sides */}
+                      {isSched && (
+                        <div className="mt-3 p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-blue-50/70 dark:bg-blue-900/20 text-sm">
+                          <p className="text-blue-800 dark:text-blue-200 font-medium">
+                            Scheduled
+                          </p>
+                          <p className="text-blue-700 dark:text-blue-300">
+                            Date: {new Date(acceptedRec.scheduleDate).toLocaleString()}
+                          </p>
+                          <p className="text-blue-700 dark:text-blue-300">
+                            Type: {acceptedRec.meetingType}
+                          </p>
+                          {acceptedRec.meetingType === "ONLINE" && acceptedRec.meetingLink && (
+                            <p className="text-blue-700 dark:text-blue-300 truncate">
+                              Link:{" "}
+                              <a
+                                href={acceptedRec.meetingLink}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="underline"
+                              >
+                                {acceptedRec.meetingLink}
+                              </a>
+                            </p>
+                          )}
+                        </div>
                       )}
 
                       <div className="flex justify-between items-center mt-5 text-sm text-slate-500 dark:text-slate-400">
@@ -453,22 +656,96 @@ const RequestsPane = () => {
                         </div>
 
                         <div className="flex items-center gap-3">
+                          {/* Tutor side actions (not owner) */}
                           {!isOwner && (
-                            <MacPrimary
-                              onClick={() => acceptRequest(request.requestId)}
-                              disabled={accepted}
-                              className={accepted ? "opacity-60 cursor-not-allowed" : ""}
-                            >
-                              {accepted ? "Accepted" : "Accept"}
-                            </MacPrimary>
+                            <>
+                              {request.status === "CANCELLED" ? (
+                                <MacDanger
+                                  onClick={() => removeRequestPermanently(request.requestId)}
+                                >
+                                  Remove
+                                </MacDanger>
+                              ) : (
+                                <>
+                                  {directedToMe && !accepted && request.status === "PENDING" && (
+                                    <>
+                                      <MacPrimary
+                                        onClick={() => acceptRequest(request.requestId)}
+                                      >
+                                        Accept
+                                      </MacPrimary>
+                                      <MacDanger
+                                        onClick={() => declineDirected(request.requestId)}
+                                      >
+                                        Decline
+                                      </MacDanger>
+                                    </>
+                                  )}
+
+                                  {/* Schedule / Finish */}
+                                  {accepted &&
+                                    request.status !== "CANCELLED" &&
+                                    request.status !== "COMPLETED" && (
+                                      <>
+                                        <MacPrimary onClick={() => openSchedule(acceptedRec)}>
+                                          {isSched ? "Edit Schedule" : "Schedule"}
+                                        </MacPrimary>
+
+                                        {(() => {
+                                          const canFinish =
+                                            isSched &&
+                                            acceptedRec?.scheduleDate &&
+                                            new Date(acceptedRec.scheduleDate).getTime() <=
+                                              Date.now();
+                                          return canFinish ? (
+                                            <MacPrimary
+                                              className="bg-green-600 hover:bg-green-700"
+                                              onClick={() => finishAccepted(acceptedRec)}
+                                            >
+                                              Finish
+                                            </MacPrimary>
+                                          ) : null;
+                                        })()}
+                                      </>
+                                    )}
+                                </>
+                              )}
+                            </>
                           )}
 
+                          {/* Requester actions (owner) */}
                           {isOwner && (
                             <>
-                              <MacButton onClick={() => startEditing(request)}>Edit</MacButton>
-                              <MacDanger onClick={() => deleteRequest(request.requestId)}>
-                                Delete
-                              </MacDanger>
+                              {request.status === "CANCELLED" ? (
+                                <MacDanger
+                                  onClick={() => removeRequestPermanently(request.requestId)}
+                                >
+                                  Remove
+                                </MacDanger>
+                              ) : (
+                                <>
+                                  {(() => {
+                                    const st = (request.status || "").toUpperCase();
+                                    const isCompleted = st === "COMPLETED";
+                                    if (isCompleted) return null;
+                                    return (
+                                      <>
+                                        {st === "PENDING" && (
+                                          <MacButton onClick={() => startEditing(request)}>
+                                            Edit
+                                          </MacButton>
+                                        )}
+                                        {/* Keep Delete even when SCHEDULED; hide only when COMPLETED */}
+                                        <MacDanger
+                                          onClick={() => deleteRequest(request.requestId)}
+                                        >
+                                          Delete
+                                        </MacDanger>
+                                      </>
+                                    );
+                                  })()}
+                                </>
+                              )}
                             </>
                           )}
                         </div>
@@ -612,16 +889,85 @@ const RequestsPane = () => {
           </GlassCard>
         </div>
       )}
+
+      {/* Schedule Modal (Requests) */}
+      {showSched && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <GlassCard className="w-full max-w-md">
+            <div className="p-6 border-b border-slate-200 dark:border-slate-700">
+              <h4 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+                {schedTarget?.status === "SCHEDULED" ? "Edit Schedule" : "Schedule Meeting"}
+              </h4>
+            </div>
+            <form onSubmit={doSchedule} className="p-6 space-y-4">
+              <div>
+                <label className="text-sm text-slate-700 dark:text-slate-300">Date & Time *</label>
+                <input
+                  type="datetime-local"
+                  name="scheduleDate"
+                  value={schedForm.scheduleDate}
+                  onChange={(e) =>
+                    setSchedForm((p) => ({ ...p, scheduleDate: e.target.value }))
+                  }
+                  className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400/30 border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/60 text-slate-800 dark:text-slate-200"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="text-sm text-slate-700 dark:text-slate-300">Meeting Type *</label>
+                <select
+                  name="meetingType"
+                  value={schedForm.meetingType}
+                  onChange={(e) => setSchedForm((p) => ({ ...p, meetingType: e.target.value }))}
+                  className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400/30 border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/60 text-slate-800 dark:text-slate-200"
+                >
+                  <option value="ONLINE">Online</option>
+                  <option value="PHYSICAL">In-Person</option>
+                </select>
+              </div>
+
+              {schedForm.meetingType === "ONLINE" && (
+                <div>
+                  <label className="text-sm text-slate-700 dark:text-slate-300">Meeting Link *</label>
+                  <input
+                    type="url"
+                    name="meetingLink"
+                    placeholder="https://zoom.us/j/123456789 (or Google Meet/Teams link)"
+                    value={schedForm.meetingLink}
+                    onChange={(e) => setSchedForm((p) => ({ ...p, meetingLink: e.target.value }))}
+                    required
+                    className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400/30 border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/60 text-slate-800 dark:text-slate-200"
+                  />
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2">
+                <MacButton type="button" onClick={() => setShowSched(false)}>
+                  Cancel
+                </MacButton>
+                <MacPrimary type="submit" disabled={schedBusy}>
+                  {schedBusy ? "Saving..." : "Save"}
+                </MacPrimary>
+              </div>
+            </form>
+          </GlassCard>
+        </div>
+      )}
     </>
   );
 };
 
-/* ========================== Lessons Pane (My Lessons Only, with Image Upload) ========================== */
+/* ========================== Lessons Pane (My Lessons + Applied, with Image Upload) ========================== */
 const LessonsPane = () => {
   const { user } = useAuth();
   const [lessons, setLessons] = useState([]);
+  const [appliedRaw, setAppliedRaw] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingApplied, setLoadingApplied] = useState(true);
   const [msg, setMsg] = useState("");
+
+  const [lessonsTab, setLessonsTab] = useState("MINE"); // MINE | APPLIED
 
   const [showCreate, setShowCreate] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
@@ -637,11 +983,19 @@ const LessonsPane = () => {
   const [showSchedule, setShowSchedule] = useState(false);
   const [scheduleTarget, setScheduleTarget] = useState(null);
   const [scheduledAt, setScheduledAt] = useState(formatDateTimeLocal(new Date()));
+  const [meetingLink, setMeetingLink] = useState("");
+
+  // Tick so "Finish" appears once time passes (no manual refresh needed)
+  const [, setNowTick] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 30000);
+    return () => clearInterval(id);
+  }, []);
 
   const MAX_IMG_SIZE = 10 * 1024 * 1024; // 10MB
 
   const isValidImage = (file) => {
-    if (!file) return true; // optional
+    if (!file) return true;
     const okType = file.type.startsWith("image/");
     const okSize = file.size <= MAX_IMG_SIZE;
     return okType && okSize;
@@ -659,39 +1013,59 @@ const LessonsPane = () => {
     }
   };
 
+  // Load "Applied" using accepted-status-many map
+  const loadApplied = async () => {
+    setLoadingApplied(true);
+    try {
+      const listRes = await tutorPostsApi.list();
+      const allPosts = listRes?.data || [];
+      const ids = allPosts.map((p) => p.postId);
+
+      let statusMap = {};
+      if (ids.length > 0) {
+        const mapRes = await tutorPostsApi.acceptedStatusMany(ids);
+        statusMap = mapRes?.data || {};
+      }
+
+      const applied = allPosts.filter((p) => {
+        const k = p.postId;
+        return !!(statusMap[k] ?? statusMap[String(k)]);
+      });
+
+      setAppliedRaw(applied);
+    } catch {
+      setMsg("Failed to load applied lessons");
+    } finally {
+      setLoadingApplied(false);
+    }
+  };
+
   useEffect(() => {
     loadLessons();
+    loadApplied();
   }, []);
 
-  // Only my lessons
   const myLessons = useMemo(
     () => lessons.filter((l) => l.tutorId === user.userId),
     [lessons, user?.userId]
   );
 
+  const appliedLessons = useMemo(() => {
+    const flat = (appliedRaw || []).map((a) => a.post || a);
+    return flat;
+  }, [appliedRaw]);
+
   const onChange = (e) => setForm((p) => ({ ...p, [e.target.name]: e.target.value }));
 
-  /**
-   * Try uploading using multiple common combinations:
-   *  - endpoints: /image, /upload, /image/upload
-   *  - methods: POST then PUT
-   *  - field names: image, file, imageFile, photo
-   */
   const uploadLessonImage = async (postId, file) => {
     if (!file) return;
-
     let lastError = null;
-
-      try {
-        await tutorPostsApi.uploadImage( postId, file);
-        // success
-        return;
-      } catch (err) {
-        lastError = err;
-        // Continue trying other combos
-      }
-
-    // If we reach here, all attempts failed. Throw the last error up.
+    try {
+      await tutorPostsApi.uploadImage(postId, file);
+      return;
+    } catch (err) {
+      lastError = err;
+    }
     const serverMsg =
       lastError?.response?.data?.message ||
       (lastError?.response?.data?.title &&
@@ -717,7 +1091,6 @@ const LessonsPane = () => {
         return;
       }
 
-      // Create post (backend should take tutor from JWT)
       const createRes = await tutorPostsApi.create({
         title: form.title.trim(),
         description: form.description?.trim() || "",
@@ -741,11 +1114,7 @@ const LessonsPane = () => {
         try {
           await uploadLessonImage(newId, imageFile);
         } catch (upErr) {
-          // Lesson created but image failed — show partial success
-          setMsg(
-            `Lesson created, but image upload failed: ${upErr.message || "Unknown error"}`
-          );
-          // Still reload to show the created lesson
+          setMsg(`Lesson created, but image upload failed: ${upErr.message || "Unknown error"}`);
           setShowCreate(false);
           setForm({ title: "", description: "", maxParticipants: 5 });
           setImageFile(null);
@@ -807,9 +1176,7 @@ const LessonsPane = () => {
         try {
           await uploadLessonImage(editing.postId, editImageFile);
         } catch (upErr) {
-          setMsg(
-            `Lesson updated, but image upload failed: ${upErr.message || "Unknown error"}`
-          );
+          setMsg(`Lesson updated, but image upload failed: ${upErr.message || "Unknown error"}`);
           setShowEdit(false);
           setEditing(null);
           setEditImageFile(null);
@@ -844,6 +1211,7 @@ const LessonsPane = () => {
       await tutorPostsApi.remove(postId);
       setMsg("Lesson deleted");
       loadLessons();
+      loadApplied();
     } catch {
       setMsg("Failed to delete");
     }
@@ -853,6 +1221,7 @@ const LessonsPane = () => {
     setScheduleTarget(post);
     const base = post.scheduledAt ? new Date(post.scheduledAt) : new Date();
     setScheduledAt(formatDateTimeLocal(base));
+    setMeetingLink(post.meetingLink || "");
     setShowSchedule(true);
   };
 
@@ -861,33 +1230,206 @@ const LessonsPane = () => {
     try {
       await tutorPostsApi.schedule(scheduleTarget.postId, {
         scheduledAt: new Date(scheduledAt).toISOString(),
+        meetingLink: meetingLink,
       });
       setMsg("Meeting scheduled");
       setShowSchedule(false);
       setScheduleTarget(null);
       loadLessons();
+      loadApplied();
     } catch {
       setMsg("Failed to schedule");
     }
   };
 
-  /* -------------------- UI -------------------- */
+  // Finish (Lessons) — tutor can complete after scheduled time has passed
+  const finishLesson = async (post) => {
+    try {
+      setMsg("");
+      await tutorPostsApi.update(post.postId, {
+        title: post.title,
+        description: post.description || "",
+        maxParticipants: Number(post.maxParticipants) || 1,
+        status: "Completed",
+      });
+      // optimistic UI
+      setLessons((prev) =>
+        prev.map((p) => (p.postId === post.postId ? { ...p, status: "Completed" } : p))
+      );
+      setMsg("Marked as completed.");
+      await loadLessons();
+      await loadApplied();
+    } catch {
+      setMsg("Failed to mark as completed");
+    }
+  };
+
+  // helper to compute participant count safely
+  const getCount = (p) =>
+    p?.participantsCount ??
+    p?.currentParticipants ??
+    p?.enrolledCount ??
+    (Array.isArray(p?.participants) ? p.participants.length : undefined) ??
+    p?.currentCount ??
+    0;
+
+  const renderLessonCard = (p) => {
+    const scheduled = !!p.scheduledAt;
+    const count = getCount(p);
+    const max = p.maxParticipants ?? p.capacity ?? 0;
+    const st = (p.status || "").toUpperCase();
+    const isCompleted = st === "COMPLETED";
+    const isScheduledStatus = st === "SCHEDULED" || scheduled;
+
+    const canFinish =
+      scheduled &&
+      new Date(p.scheduledAt).getTime() <= Date.now() &&
+      p.tutorId === user.userId &&
+      !isCompleted;
+
+    return (
+      <GlassCard key={p.postId} className="p-6">
+        <div className="flex justify-between items-start">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+              {p.title}
+            </h2>
+            <p className="text-slate-600 dark:text-slate-300 mt-1">
+              {new Date(p.createdAt).toLocaleDateString()}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {typeof max === "number" && max > 0 && (
+              <Chip className="bg-slate-50/70 dark:bg-slate-800/50 text-black dark:text-slate-100/80">
+                {count}/{max} joined
+              </Chip>
+            )}
+            <Chip className={chipClassFor(p.status)}>{p.status}</Chip>
+          </div>
+        </div>
+
+        {p.description && (
+          <p className="text-slate-700 dark:text-slate-200 mt-3">{p.description}</p>
+        )}
+
+        {p.imageUrl && (
+          <img
+            src={toImageUrl(p.imageUrl)}
+            alt={p.title}
+            className="mt-3 h-40 w-full object-cover rounded-xl border border-slate-200 dark:border-slate-700"
+            loading="lazy"
+          />
+        )}
+
+        {scheduled && (
+          <div className="mt-2 text-sm text-blue-700 dark:text-blue-300">
+            <div>Scheduled: {new Date(p.scheduledAt).toLocaleString()}</div>
+            {p.meetingLink && (
+              <div className="truncate">
+                Meeting:{" "}
+                <a
+                  href={p.meetingLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline"
+                  title={p.meetingLink}
+                >
+                  {p.meetingLink}
+                </a>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="flex justify-between items-center mt-5 text-sm text-slate-500 dark:text-slate-400">
+          <div className="flex items-center">
+            <div className="w-8 h-8 bg-indigo-100 text-indigo-700 dark:bg-indigo-800 dark:text-white rounded-full flex items-center justify-center mr-2 font-semibold">
+              {p.tutorName?.charAt(0).toUpperCase() || "T"}
+            </div>
+            <div>
+              <span className="font-medium text-slate-800 dark:text-slate-200">
+                {p.tutorName || "Tutor"}
+              </span>
+              <span className="ml-1">• {new Date(p.createdAt).toLocaleDateString()}</span>
+            </div>
+          </div>
+
+          {/* Tutor actions on own lessons */}
+          {p.tutorId === user.userId ? (
+            <div className="flex items-center gap-3">
+              {/* Remove Edit when scheduled; keep Delete. Remove ALL when completed */}
+              {!isCompleted && !isScheduledStatus && (
+                <MacButton onClick={() => openEdit(p)}>Edit</MacButton>
+              )}
+              {!isCompleted && (
+                <MacDanger onClick={() => deleteLesson(p.postId)}>Delete</MacDanger>
+              )}
+              {!isCompleted && (
+                <MacPrimary onClick={() => openSchedule(p)}>
+                  {scheduled ? "Edit Schedule" : "Schedule"}
+                </MacPrimary>
+              )}
+              {!isCompleted && canFinish && (
+                <MacPrimary
+                  className="bg-green-600 hover:bg-green-700"
+                  onClick={() => finishLesson(p)}
+                >
+                  Finish
+                </MacPrimary>
+              )}
+            </div>
+          ) : (
+            <div />
+          )}
+        </div>
+      </GlassCard>
+    );
+  };
+
+  const isLoadingTab =
+    (lessonsTab === "MINE" && loading) || (lessonsTab === "APPLIED" && (loadingApplied || loading));
+
+  const listForTab = lessonsTab === "MINE" ? myLessons : appliedLessons;
+
   return (
     <>
       <div className="max-w-6xl mx-auto px-6 py-6 space-y-6">
         <GlassCard className="p-6">
-          {/* Header */}
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100">
-              My Lessons
+              Lessons
             </h2>
             <div className="flex gap-2">
               <MacPrimary onClick={() => setShowCreate(true)}>+ New Lesson</MacPrimary>
-              <MacButton onClick={loadLessons}>Refresh</MacButton>
+              <MacButton
+                onClick={() => {
+                  loadLessons();
+                  loadApplied();
+                }}
+              >
+                Refresh
+              </MacButton>
             </div>
           </div>
 
-          {/* Messages */}
+          {/* Lessons sub-tabs */}
+          <div className="inline-flex bg-white/60 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl p-1">
+            {["MINE", "APPLIED"].map((t) => (
+              <button
+                key={t}
+                onClick={() => setLessonsTab(t)}
+                className={
+                  "px-4 py-1.5 text-sm font-medium rounded-lg transition " +
+                  (lessonsTab === t
+                    ? "bg-blue-600 text-white shadow"
+                    : "text-slate-700 dark:text-slate-300 hover:bg-white/70 dark:hover:bg-slate-700/60")
+                }
+              >
+                {t === "MINE" ? "My Lessons" : "Applied"}
+              </button>
+            ))}
+          </div>
+
           {msg && (
             <GlassCard
               className={
@@ -901,96 +1443,30 @@ const LessonsPane = () => {
             </GlassCard>
           )}
 
-          {/* Lessons List */}
-          {loading ? (
-            <div className="grid gap-4">
+          {isLoadingTab ? (
+            <div className="grid gap-4 mt-4">
               {[...Array(3)].map((_, i) => (
                 <SkeletonCard key={i} />
               ))}
             </div>
-          ) : myLessons.length === 0 ? (
+          ) : listForTab.length === 0 ? (
             <GlassCard className="p-10 mt-4 text-center">
               <EmptyIllustration />
               <p className="mt-4 text-slate-600 dark:text-slate-300">
-                You haven't posted any lessons yet. Create one!
+                {lessonsTab === "MINE"
+                  ? "You haven't posted any lessons yet. Create one!"
+                  : "You haven't applied to any lessons yet."}
               </p>
             </GlassCard>
           ) : (
             <div className="grid mt-4 md:grid-cols-2 gap-5">
-              {myLessons.map((p) => {
-                const scheduled = !!p.scheduledAt;
-
-                return (
-                  <GlassCard key={p.postId} className="p-6">
-                    {/* Top: Title + Status */}
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-                          {p.title}
-                        </h2>
-                        <p className="text-slate-600 dark:text-slate-300 mt-1">
-                          {new Date(p.createdAt).toLocaleDateString()}
-                        </p>
-                      </div>
-                      <Chip className={statusStyles[p.status] || ""}>{p.status}</Chip>
-                    </div>
-
-                    {/* Description */}
-                    {p.description && (
-                      <p className="text-slate-700 dark:text-slate-200 mt-3">{p.description}</p>
-                    )}
-
-                    {/* Preview image if available */}
-                    {p.imageUrl && (
-                      <img
-                        src={toImageUrl(p.imageUrl)}
-                        alt={p.title}
-                        className="mt-3 h-40 w-full object-cover rounded-xl border border-slate-200 dark:border-slate-700"
-                        loading="lazy"
-                      />
-                    )}
-
-                    {/* Scheduled At */}
-                    {scheduled && (
-                      <div className="mt-2 text-sm text-blue-600 dark:text-blue-400">
-                        Scheduled: {new Date(p.scheduledAt).toLocaleString()}
-                      </div>
-                    )}
-
-                    {/* Tutor Info (you) */}
-                    <div className="flex justify-between items-center mt-5 text-sm text-slate-500 dark:text-slate-400">
-                      <div className="flex items-center">
-                        <div className="w-8 h-8 bg-indigo-100 text-indigo-700 dark:bg-indigo-800 dark:text-white rounded-full flex items-center justify-center mr-2 font-semibold">
-                          {p.tutorName?.charAt(0).toUpperCase() ||
-                            user.fullName?.charAt(0).toUpperCase() ||
-                            "T"}
-                        </div>
-                        <div>
-                          <span className="font-medium text-slate-800 dark:text-slate-200">
-                            {p.tutorName || user.fullName || "Tutor"}
-                          </span>
-                          <span className="ml-1">• {new Date(p.createdAt).toLocaleDateString()}</span>
-                        </div>
-                      </div>
-
-                      {/* Actions (owner-only) */}
-                      <div className="flex items-center gap-3">
-                        <MacButton onClick={() => openEdit(p)}>Edit</MacButton>
-                        <MacDanger onClick={() => deleteLesson(p.postId)}>Delete</MacDanger>
-                        <MacPrimary onClick={() => openSchedule(p)}>
-                          {scheduled ? "Edit Schedule" : "Schedule"}
-                        </MacPrimary>
-                      </div>
-                    </div>
-                  </GlassCard>
-                );
-              })}
+              {listForTab.map((p) => renderLessonCard(p))}
             </div>
           )}
         </GlassCard>
       </div>
 
-      {/* --- Create Modal (with image upload) --- */}
+      {/* New Lesson Modal */}
       {showCreate && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
           <GlassCard className="w-full max-w-md">
@@ -1024,7 +1500,6 @@ const LessonsPane = () => {
                 className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/60 text-slate-700 dark:text-slate-200 focus:ring-2 focus:ring-blue-500/40 outline-none"
               />
 
-              {/* Image (optional, ≤ 10MB) */}
               <div className="pt-1">
                 <label className="block text-sm text-slate-700 dark:text-slate-300 mb-1">
                   Optional Image (≤ 10MB)
@@ -1063,7 +1538,7 @@ const LessonsPane = () => {
         </div>
       )}
 
-      {/* --- Edit Modal (with optional replace image) --- */}
+      {/* Edit Lesson Modal */}
       {showEdit && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
           <GlassCard className="w-full max-w-md">
@@ -1095,7 +1570,6 @@ const LessonsPane = () => {
                 className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/60 text-slate-700 dark:text-slate-200 focus:ring-2 focus:ring-blue-500/40 outline-none"
               />
 
-              {/* Optional replace image */}
               <div className="pt-1">
                 <label className="block text-sm text-slate-700 dark:text-slate-300 mb-1">
                   Replace Image (optional, ≤ 10MB)
@@ -1108,7 +1582,7 @@ const LessonsPane = () => {
                              file:border-0 file:text-sm file:font-semibold 
                              file:bg-blue-50 file:text-blue-700 
                              hover:file:bg-blue-100
-                             dark:file:bg-slate-800 dark:file:text-slate-200 dark:hover:file:bg-slate-700"
+                             dark:file:bg-slate-800 dark:file:text-slate-200 dark:hover$file:bg-slate-700"
                 />
                 {editImageFile && (
                   <div className="mt-1 text-xs text-slate-600 dark:text-slate-400">
@@ -1134,7 +1608,7 @@ const LessonsPane = () => {
         </div>
       )}
 
-      {/* Schedule Modal */}
+      {/* Schedule Lesson Modal */}
       {showSchedule && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
           <GlassCard className="w-full max-w-md">
@@ -1144,13 +1618,33 @@ const LessonsPane = () => {
               </h3>
             </div>
             <form onSubmit={schedule} className="p-6 space-y-4">
-              <input
-                type="datetime-local"
-                value={scheduledAt}
-                onChange={(e) => setScheduledAt(e.target.value)}
-                required
-                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/60 text-slate-700 dark:text-slate-200 focus:ring-2 focus:ring-blue-500/40 outline-none"
-              />
+              <div>
+                <label className="block text-sm text-slate-700 dark:text-slate-300">
+                  Date & Time *
+                </label>
+                <input
+                  type="datetime-local"
+                  value={scheduledAt}
+                  onChange={(e) => setScheduledAt(e.target.value)}
+                  required
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/60 text-slate-700 dark:text-slate-200 focus:ring-2 focus:ring-blue-500/40 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm text-slate-700 dark:text-slate-300">
+                  Meeting Link *
+                </label>
+                <input
+                  type="url"
+                  value={meetingLink}
+                  onChange={(e) => setMeetingLink(e.target.value)}
+                  placeholder="https://zoom.us/j/123456789 (or Google Meet/Teams link)"
+                  required
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/60 text-slate-700 dark:text-slate-200 focus:ring-2 focus:ring-blue-500/40 outline-none"
+                />
+              </div>
+
               <div className="flex justify-end gap-2">
                 <MacButton type="button" onClick={() => setShowSchedule(false)}>
                   Cancel
@@ -1198,10 +1692,8 @@ const RequestsPage = () => {
 
   return (
     <div className="relative min-h-screen font-sans">
-      {/* Background */}
       <div className="absolute inset-0 -z-10 bg-gradient-to-b from-slate-50 via-white to-slate-100 dark:from-slate-900 dark:via-slate-900 dark:to-slate-800" />
 
-      {/* Top Bar */}
       <GlassBar className=" border-x-0 border-t-0 px-6 py-4 sticky top-0 z-40">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -1227,7 +1719,6 @@ const RequestsPage = () => {
 
       {activeTab === "REQUESTS" ? <RequestsPane /> : <LessonsPane />}
 
-      {/* Dock */}
       <Dock peek={18}>
         <MacButton onClick={() => navigate("/home")}>Home</MacButton>
         <MacButton onClick={() => navigate("/request")}>+ Request</MacButton>

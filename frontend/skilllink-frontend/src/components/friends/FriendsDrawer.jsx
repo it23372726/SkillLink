@@ -1,10 +1,10 @@
 // src/components/friends/FriendsDrawer.jsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useAuth } from "../../context/AuthContext";
 import { GlassCard, MacButton, MacPrimary, Input } from "../UI";
 import { toImageUrl } from "../../utils/image";
 import { friendsApi } from "../../api";
-
+import { useNavigate, generatePath } from "react-router-dom";
 
 /* ====== small utils ====== */
 const debounce = (fn, ms = 350) => {
@@ -54,8 +54,14 @@ const Avatar = ({ name, imageUrl, size = 9 }) => {
   );
 };
 
+const truncate = (s, n = 20) => {
+  if (!s) return "";
+  return s.length > n ? s.slice(0, n) + "…" : s;
+};
+
 export default function FriendsDrawer({ className = "" }) {
   const { user } = useAuth();
+  const navigate = useNavigate();
 
   const [friends, setFriends] = useState([]);
   const [query, setQuery] = useState("");
@@ -126,6 +132,20 @@ export default function FriendsDrawer({ className = "" }) {
     [friends]
   );
 
+  const openProfile = useCallback(
+    (id) => {
+      navigate(generatePath("/u/:id", { id }));
+    },
+    [navigate]
+  );
+
+  const rowKeyDown = (e, id) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      openProfile(id);
+    }
+  };
+
   return (
     <div className={`pointer-events-auto ${className}`}>
       {/* outer container is sized/positioned by parent (fixed + top/right + height) */}
@@ -162,7 +182,13 @@ export default function FriendsDrawer({ className = "" }) {
                 sugg.map((u) => (
                   <div
                     key={u.userId}
-                    className="flex items-center justify-between px-2 py-2 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => openProfile(u.userId)}
+                    onKeyDown={(e) => rowKeyDown(e, u.userId)}
+                    className="flex items-center justify-between px-2 py-2 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition cursor-pointer"
+                    aria-label={`Open ${u.fullName}'s profile`}
+                    title={`Open ${u.fullName}'s profile`}
                   >
                     <div className="flex items-center gap-2">
                       <Avatar name={u.fullName} imageUrl={u.profilePicture} />
@@ -171,16 +197,30 @@ export default function FriendsDrawer({ className = "" }) {
                           <Highlight text={u.fullName} q={query} />
                         </div>
                         <div className="text-xs text-slate-500 dark:text-slate-400">
-                          <Highlight text={u.email} q={query} />
+                          <Highlight text={truncate(u.email, 20)} q={query} />
                         </div>
                       </div>
                     </div>
                     {friendSet.has(u.userId) ? (
-                      <MacButton size="sm" onClick={() => unfollow(u.userId)}>
+                      <MacButton
+                        size="sm"
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          unfollow(u.userId);
+                        }}
+                      >
                         Unfollow
                       </MacButton>
                     ) : (
-                      <MacPrimary size="sm" onClick={() => follow(u.userId)}>
+                      <MacPrimary
+                        size="sm"
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          follow(u.userId);
+                        }}
+                      >
                         Follow
                       </MacPrimary>
                     )}
@@ -199,7 +239,7 @@ export default function FriendsDrawer({ className = "" }) {
 
           {loadingFriends ? (
             <div className="space-y-2">
-              {[...Array(4)].map((_, i) => (
+              {Array.from({ length: 4 }).map((_, i) => (
                 <div
                   key={i}
                   className="h-12 rounded-lg bg-slate-200/60 dark:bg-slate-800/60 animate-pulse"
@@ -208,11 +248,21 @@ export default function FriendsDrawer({ className = "" }) {
             </div>
           ) : friends.length === 0 ? (
             <GlassCard className="p-4 text-sm text-slate-600 dark:text-slate-300">
-              You’re not following anyone yet. Use the search above to find people.
+              You’re not following anyone yet. Use the search above to find
+              people.
             </GlassCard>
           ) : (
             friends.map((f) => (
-              <GlassCard key={f.userId} className="p-3 flex items-center justify-between">
+              <GlassCard
+                key={f.userId}
+                role="button"
+                tabIndex={0}
+                onClick={() => openProfile(f.userId)}
+                onKeyDown={(e) => rowKeyDown(e, f.userId)}
+                className="p-3 flex items-center justify-between cursor-pointer"
+                aria-label={`Open ${f.fullName}'s profile`}
+                title={`Open ${f.fullName}'s profile`}
+              >
                 <div className="flex items-center gap-2">
                   <Avatar name={f.fullName} imageUrl={f.profilePicture} />
                   <div className="leading-tight">
@@ -220,11 +270,18 @@ export default function FriendsDrawer({ className = "" }) {
                       {f.fullName}
                     </div>
                     <div className="text-xs text-slate-500 dark:text-slate-400">
-                      {f.email}
+                      {truncate(f.email, 20)}
                     </div>
                   </div>
                 </div>
-                <MacButton size="sm" onClick={() => unfollow(f.userId)}>
+                <MacButton
+                  size="sm"
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    unfollow(f.userId);
+                  }}
+                >
                   Unfollow
                 </MacButton>
               </GlassCard>

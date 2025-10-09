@@ -13,6 +13,7 @@ import AdminDashboard from "./pages/AdminDashboard";
 import "@fortawesome/fontawesome-free/css/all.min.css";
 import Welcome from "./LandingPages/Welcome";
 import HomeFeed from "./pages/HomeFeed";
+import PublicProfile from "./pages/PublicProfile";
 
 
 function App() {
@@ -42,6 +43,7 @@ function App() {
               <Route path="/VideoSession" element={<VideoSession />} />
               <Route path="/skill" element={<SkillsManagement />} />
               <Route path="/profile" element={<UserProfile />} />
+              <Route path="/u/:userId" element={<PublicProfile />} />
               <Route path="/request" element={<RequestsPage />} />
             </Route>
 
