@@ -99,7 +99,7 @@ const PostCard = ({ item, onLike, onDislike, onRemoveReaction, onAccept }) => {
     }
   };
 
-  const loadPreview = async () => {
+  const loadPreview = useCallback(async () => {
     if (!item?.commentCount || item.commentCount <= 0) {
       setPreview(null);
       return;
@@ -114,7 +114,7 @@ const PostCard = ({ item, onLike, onDislike, onRemoveReaction, onAccept }) => {
     } finally {
       setLoadingPreview(false);
     }
-  };
+  }, [item?.commentCount, item?.postId, item?.postType]);
 
   useEffect(() => {
     if (item?.commentCount > 0 && !openComments) {
@@ -122,7 +122,7 @@ const PostCard = ({ item, onLike, onDislike, onRemoveReaction, onAccept }) => {
     } else {
       setPreview(null);
     }
-  }, [item.postId, item.commentCount, openComments]);
+  }, [item?.commentCount, item?.postId, openComments, loadPreview]);
 
   return (
     <GlassCard className="p-4">
@@ -246,6 +246,8 @@ const debounce = (fn, ms = 450) => {
   };
 };
 
+const acceptedStatusSet = new Set(["SCHEDULED", "CLOSED", "COMPLETED", "ACCEPTED"]);
+
 /* ---- Page ---- */
 const HomeFeed = () => {
   const { user: authUser } = useAuth();
@@ -293,10 +295,9 @@ const HomeFeed = () => {
   const PAGE_SIZE = 8;
   const norm = (s) => (s || "").toUpperCase();
   const keyOf = (it) => `${it.postType}-${it.postId}`;
-  const acceptedStatusSet = new Set(["SCHEDULED", "CLOSED", "COMPLETED", "ACCEPTED"]);
 
   // Function to load posts (LESSON)
-  const loadPosts = async (p = 1, qStr = "") => {
+  const loadPosts = useCallback(async (p = 1, qStr = "") => {
     if (busy || (p > 1 && postsDone)) return;
     setBusy(true);
     try {
@@ -324,10 +325,10 @@ const HomeFeed = () => {
       setBusy(false);
       setPostsInitialLoaded(true);
     }
-  };
+  }, [busy, postsDone]); // Add dependencies used inside the function
 
   // Function to load requests (REQUEST)
-  const loadRequests = async (p = 1, qStr = "") => {
+  const loadRequests = useCallback(async (p = 1, qStr = "") => {
     if (busy || (p > 1 && requestsDone)) return;
     setBusy(true);
     try {
@@ -374,7 +375,7 @@ const HomeFeed = () => {
       setBusy(false);
       setRequestsInitialLoaded(true);
     }
-  };
+  }, [busy, requestsDone]); // Add dependencies used inside the function
   
   // Initial load and tab switching
   useEffect(() => {
@@ -383,7 +384,8 @@ const HomeFeed = () => {
     } else if (feedTab === "REQUESTS" && !requestsInitialLoaded) {
       loadRequests(1, liveQ);
     }
-  }, [feedTab, postsInitialLoaded, requestsInitialLoaded, liveQ]);
+  }, [feedTab, postsInitialLoaded, requestsInitialLoaded, liveQ, loadPosts, loadRequests]); // Added loadPosts and loadRequests
+  
 
   // Search refresh
   useEffect(() => {
@@ -397,7 +399,7 @@ const HomeFeed = () => {
     } else {
       loadRequests(1, liveQ);
     }
-  }, [liveQ]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [liveQ, feedTab, loadPosts, loadRequests]);
 
   const refreshCurrentTab = () => {
     if (feedTab === "POSTS") {
