@@ -36,5 +36,10 @@ namespace SkillLink.API.Services
 
         public List<AcceptedRequestWithDetails> GetRequestsIAskedFor(int userId)
             => _repo.GetRequestsIAskedFor(userId);
+        public AcceptedRequestWithDetails? GetAcceptedMeta(int acceptedRequestId)
+            => _repo.GetAcceptedMeta(acceptedRequestId);
+
+        public void Complete(int acceptedRequestId)
+            => _repo.Complete(acceptedRequestId);
     }
 }

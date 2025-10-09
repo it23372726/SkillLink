@@ -2,6 +2,7 @@ using Microsoft.Data.SqlClient;
 using SkillLink.API.Models;
 using SkillLink.API.Data;
 using SkillLink.API.Repositories.Abstractions;
+using SkillLink.API.Dtos.Auth;
 
 namespace SkillLink.API.Repositories
 {
@@ -12,6 +13,41 @@ namespace SkillLink.API.Repositories
         public AuthRepository(DbHelper db)
         {
             _db = db;
+        }
+
+        public async Task<PublicUserDto?> GetPublicByIdAsync(int userId)
+        {
+            const string sql = @"
+                SELECT TOP 1
+                    u.UserId,
+                    u.FullName,
+                    u.Bio,
+                    u.Location,
+                    u.ProfilePicture,
+                    u.ReadyToTeach,
+                    u.CreatedAt
+                FROM Users u
+                WHERE u.UserId = @UserId AND u.IsActive = 1;";
+
+            await using var conn = _db.GetConnection();
+            await conn.OpenAsync();
+
+            await using var cmd = new SqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("@UserId", userId );
+
+            await using var reader = cmd.ExecuteReader();
+            if (!await reader.ReadAsync()) return null;
+
+            return new PublicUserDto
+            {
+                UserId = reader.GetInt32(reader.GetOrdinal("UserId")),
+                FullName = reader.GetString(reader.GetOrdinal("FullName")),
+                Bio = reader.IsDBNull(reader.GetOrdinal("Bio")) ? null : reader.GetString(reader.GetOrdinal("Bio")),
+                Location = reader.IsDBNull(reader.GetOrdinal("Location")) ? null : reader.GetString(reader.GetOrdinal("Location")),
+                ProfilePicture = reader.IsDBNull(reader.GetOrdinal("ProfilePicture")) ? null : reader.GetString(reader.GetOrdinal("ProfilePicture")),
+                ReadyToTeach = reader.GetBoolean(reader.GetOrdinal("ReadyToTeach")),
+                CreatedAt = reader.GetDateTime(reader.GetOrdinal("CreatedAt"))
+            };
         }
 
         public User? GetUserById(int id)

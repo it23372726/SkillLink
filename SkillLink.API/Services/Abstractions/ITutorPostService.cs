@@ -9,8 +9,10 @@ namespace SkillLink.API.Services.Abstractions
         List<TutorPostWithUser> GetPosts();
         TutorPostWithUser? GetById(int postId);
         void AcceptPost(int postId, int userId);
-        void Schedule(int postId, DateTime scheduledAt);
+        void Schedule(int postId, ScheduleTutorPostDto body);
         void UpdatePost(int postId, int tutorId, UpdateTutorPostDto dto);
         void DeletePost(int postId, int tutorId);
+        bool HasUserAccepted(int postId, int userId);
+        IDictionary<int, bool> GetAcceptedMapForUser(IEnumerable<int> postIds, int userId);
     }
 }

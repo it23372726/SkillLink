@@ -1,4 +1,5 @@
 using SkillLink.API.Models;
+using SkillLink.API.Dtos.Auth;
 
 namespace SkillLink.API.Repositories.Abstractions
 {
@@ -22,5 +23,8 @@ namespace SkillLink.API.Repositories.Abstractions
 
         // Admin / Cleanup
         void DeleteUserWithRules(int userId);
+
+        Task<PublicUserDto?> GetPublicByIdAsync(int userId);
+
     }
 }

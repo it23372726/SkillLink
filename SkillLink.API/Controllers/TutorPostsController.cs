@@ -73,6 +73,39 @@ namespace SkillLink.API.Controllers
             return Ok(post);
         }
 
+        [HttpGet("{postId:int}/accepted-status")]
+        public IActionResult AcceptedStatus(int postId)
+        {
+            try
+            {
+                var userId = GetUserId();
+                var hasAccepted = _service.HasUserAccepted(postId, userId);
+                return Ok(new { hasAccepted });
+            }
+            catch (KeyNotFoundException)
+            {
+                return NotFound(new { message = "Post not found" });
+            }
+        }
+        [HttpGet("accepted-status")]
+        public IActionResult AcceptedStatusMany([FromQuery] string ids)
+        {
+            if (string.IsNullOrWhiteSpace(ids)) return Ok(new Dictionary<int, bool>());
+
+            var userId = GetUserId();
+            var postIds = ids.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                            .Select(s => int.TryParse(s, out var id) ? id : (int?)null)
+                            .Where(id => id.HasValue)
+                            .Select(id => id!.Value)
+                            .Distinct()
+                            .ToList();
+
+            if (postIds.Count == 0) return Ok(new Dictionary<int, bool>());
+
+            var map = _service.GetAcceptedMapForUser(postIds, userId); // { postId: true/false }
+            return Ok(map);
+        }
+
         [HttpPost("{postId:int}/accept")]
         public IActionResult Accept(int postId)
         {
@@ -92,10 +125,10 @@ namespace SkillLink.API.Controllers
             }
         }
 
-        [HttpPut("{postId:int}/schedule")]
+       [HttpPut("{postId:int}/schedule")]
         public IActionResult Schedule(int postId, [FromBody] ScheduleTutorPostDto body)
         {
-            _service.Schedule(postId, body.ScheduledAt);
+            _service.Schedule(postId, body);
             return Ok(new { message = "Scheduled successfully" });
         }
 

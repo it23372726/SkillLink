@@ -14,6 +14,8 @@ namespace SkillLink.API.Controllers
         private readonly IFeedService _feed;
         private readonly IReactionService _reactions;
         private readonly ICommentService _comments;
+        private int RequireUserId() => int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
+
 
         public FeedController(IFeedService feed, IReactionService reactions, ICommentService comments)
         {
@@ -27,6 +29,21 @@ namespace SkillLink.API.Controllers
         {
             var me = int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
             return Ok(_feed.GetFeed(me, page, pageSize, q));
+        }
+        [HttpPost("sort")]
+        public IActionResult Sort([FromBody] List<FeedItemDto> data)
+        {
+            if (data == null || !data.Any())
+            {
+                return Ok(new List<FeedItemDto>()); // Return empty list if input is empty
+            }
+
+            var userId = RequireUserId();
+            var sortedData = _feed.GetSort(data, userId); // Pass the user ID to the service
+            var sortedTitles = sortedData.Select(item => item.Title);
+            Console.WriteLine("SORTED DATA Controller: " + string.Join(", ", sortedTitles));
+
+            return Ok(sortedData);
         }
 
         [HttpPost("{postType}/{postId}/like")]

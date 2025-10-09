@@ -19,12 +19,14 @@ namespace SkillLink.API.Repositories.Abstractions
         void UpdateStatus(int postId, string status);
 
         // Schedule
-        void Schedule(int postId, DateTime scheduledAt);
+        void Schedule(int postId, ScheduleTutorPostDto body);
 
         // Update / Delete helpers
         int? GetOwnerId(int postId);
         int GetCurrentParticipantsCount(int postId);
         void UpdatePost(int postId, string title, string? description, int maxParticipants);
         void Delete(int postId);
+        HashSet<int> GetAcceptedPostIdsForUser(int userId, IEnumerable<int> postIds);
+
     }
 }

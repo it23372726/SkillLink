@@ -1,5 +1,7 @@
 using SkillLink.API.Models;
 using System.Security.Claims;
+using SkillLink.API.Dtos.Auth;
+
 
 namespace SkillLink.API.Services.Abstractions
 {
@@ -16,5 +18,6 @@ namespace SkillLink.API.Services.Abstractions
         bool SetActive(int userId, bool isActive);
         void DeleteUserFromDB(int id);
         bool UpdateProfilePicture(int userId, string? path);
+        Task<PublicUserDto?> GetPublicUserAsync(int userId);
     }
 }

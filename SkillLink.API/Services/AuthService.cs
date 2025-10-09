@@ -7,6 +7,7 @@ using System.Security.Claims;
 using System.Net;
 using SkillLink.API.Services.Abstractions;
 using SkillLink.API.Repositories.Abstractions;
+using SkillLink.API.Dtos.Auth;
 
 namespace SkillLink.API.Services
 {
@@ -22,6 +23,11 @@ namespace SkillLink.API.Services
             _email = email;
             _repo = repo;
         }
+
+
+
+        public Task<PublicUserDto?> GetPublicUserAsync(int userId)
+            => _repo.GetPublicByIdAsync(userId);
 
         // ------------------- Current User -------------------
         public User? CurrentUser(ClaimsPrincipal user)

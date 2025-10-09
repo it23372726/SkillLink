@@ -21,6 +21,8 @@ namespace SkillLink.API.Models
         // status/extra
         public string Status { get; set; } = "";         // request status or lesson status
         public DateTime? ScheduledAt { get; set; }       // lessons only
+        public int? PreferredTutorId { get; set; }
+        public bool IsPrivate { get; set; } = false;
 
         // counts & my reaction
         public int Likes { get; set; }

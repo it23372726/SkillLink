@@ -10,6 +10,58 @@ namespace SkillLink.API.Repositories
         private readonly DbHelper _dbHelper;
         public RequestRepository(DbHelper dbHelper) => _dbHelper = dbHelper;
 
+        public List<RequestWithUser> GetAllVisibleWithUser(int? viewerUserId)
+        {
+            var list = new List<RequestWithUser>();
+            using var conn = _dbHelper.GetConnection();
+            conn.Open();
+
+            // Show:
+            //  - public, non-cancelled requests to everyone
+            //  - ALL requests (including CANCELLED) to the requester (owner)
+            //  - private requests where viewer is requester or targeted tutor
+            var sql = @"
+                SELECT r.*, u.FullName, u.Email
+                FROM Requests r
+                JOIN Users u ON r.LearnerId = u.UserId
+                WHERE
+                    (
+                        r.IsPrivate = 0
+                        AND r.Status <> 'CANCELLED'
+                    )
+                    OR (
+                        @viewer IS NOT NULL
+                        AND (
+                                r.LearnerId = @viewer
+                                OR r.PreferredTutorId = @viewer
+                            )
+                    )
+                ORDER BY r.CreatedAt DESC, r.RequestId DESC";
+
+            using var cmd = new SqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("@viewer", (object?)viewerUserId ?? DBNull.Value);
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+                list.Add(ReadRequestWithUser(reader));
+
+            return list;
+        }
+        private static RequestWithUser ReadRequestWithUser(SqlDataReader reader) => new()
+        {
+            RequestId = reader.GetInt32(reader.GetOrdinal("RequestId")),
+            LearnerId = reader.GetInt32(reader.GetOrdinal("LearnerId")),
+            SkillName = reader.GetString(reader.GetOrdinal("SkillName")),
+            Topic = reader.IsDBNull(reader.GetOrdinal("Topic")) ? null : reader.GetString(reader.GetOrdinal("Topic")),
+            Status = reader.GetString(reader.GetOrdinal("Status")),
+            CreatedAt = reader.GetDateTime(reader.GetOrdinal("CreatedAt")),
+            Description = reader.IsDBNull(reader.GetOrdinal("Description")) ? null : reader.GetString(reader.GetOrdinal("Description")),
+            FullName = reader.GetString(reader.GetOrdinal("FullName")),
+            Email = reader.GetString(reader.GetOrdinal("Email")),
+            PreferredTutorId = reader.IsDBNull(reader.GetOrdinal("PreferredTutorId")) ? null : reader.GetInt32(reader.GetOrdinal("PreferredTutorId")),
+            IsPrivate = !reader.IsDBNull(reader.GetOrdinal("IsPrivate")) && reader.GetBoolean(reader.GetOrdinal("IsPrivate"))
+        };
+
         public RequestWithUser? GetByIdWithUser(int requestId)
         {
             RequestWithUser? data = null;
@@ -32,6 +84,8 @@ namespace SkillLink.API.Repositories
                     Status = reader.GetString(reader.GetOrdinal("Status")),
                     CreatedAt = reader.GetDateTime(reader.GetOrdinal("CreatedAt")),
                     Description = reader.IsDBNull(reader.GetOrdinal("Description")) ? null : reader.GetString(reader.GetOrdinal("Description")),
+                    PreferredTutorId = reader.IsDBNull(reader.GetOrdinal("PreferredTutorId")) ? null : reader.GetInt32(reader.GetOrdinal("PreferredTutorId")),
+                    IsPrivate = !reader.IsDBNull(reader.GetOrdinal("IsPrivate")) && reader.GetBoolean(reader.GetOrdinal("IsPrivate")),
                     FullName = reader.GetString(reader.GetOrdinal("FullName")),
                     Email = reader.GetString(reader.GetOrdinal("Email"))
                 };
@@ -100,16 +154,18 @@ namespace SkillLink.API.Repositories
         {
             using var conn = _dbHelper.GetConnection();
             conn.Open();
-            var cmd = new SqlCommand(
-                "INSERT INTO Requests (LearnerId, SkillName, Topic, Description) VALUES (@learnerId, @skillName, @topic, @description)",
-                conn);
+            var cmd = new SqlCommand(@"
+                INSERT INTO Requests (LearnerId, SkillName, Topic, Description, Status, PreferredTutorId, IsPrivate)
+                VALUES (@learnerId, @skillName, @topic, @description, @status, @preferredTutorId, @isPrivate)", conn);
             cmd.Parameters.AddWithValue("@learnerId", req.LearnerId);
             cmd.Parameters.AddWithValue("@skillName", req.SkillName);
             cmd.Parameters.AddWithValue("@topic", (object?)req.Topic ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@description", (object?)req.Description ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@status", req.Status);
+            cmd.Parameters.AddWithValue("@preferredTutorId", (object?)req.PreferredTutorId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@isPrivate", req.IsPrivate);
             cmd.ExecuteNonQuery();
         }
-
         public void Update(int requestId, Request req)
         {
             using var conn = _dbHelper.GetConnection();
@@ -145,42 +201,72 @@ namespace SkillLink.API.Repositories
             cmd.ExecuteNonQuery();
         }
 
-        public List<RequestWithUser> SearchWithUser(string query)
+       public List<RequestWithUser> SearchVisibleWithUser(string query, int? viewerUserId)
         {
             var list = new List<RequestWithUser>();
             using var conn = _dbHelper.GetConnection();
             conn.Open();
 
             var sql = @"
-                SELECT r.*, u.FullName, u.Email 
-                FROM Requests r 
-                JOIN Users u ON r.LearnerId = u.UserId 
-                WHERE r.SkillName LIKE @query 
-                    OR r.Topic LIKE @query 
-                    OR r.Description LIKE @query 
-                    OR u.FullName LIKE @query 
+                SELECT r.*, u.FullName, u.Email
+                FROM Requests r
+                JOIN Users u ON r.LearnerId = u.UserId
+                WHERE (r.SkillName LIKE @q OR r.Topic LIKE @q OR r.Description LIKE @q OR u.FullName LIKE @q)
+                AND (
+                        (r.IsPrivate = 0 AND r.Status <> 'CANCELLED')
+                    OR (@viewer IS NOT NULL AND (r.LearnerId = @viewer OR r.PreferredTutorId = @viewer))
+                )
                 ORDER BY r.CreatedAt DESC, r.RequestId DESC";
 
             using var cmd = new SqlCommand(sql, conn);
-            cmd.Parameters.AddWithValue("@query", $"%{query}%");
+            cmd.Parameters.AddWithValue("@q", $"%{query}%");
+            cmd.Parameters.AddWithValue("@viewer", (object?)viewerUserId ?? DBNull.Value);
 
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
-            {
-                list.Add(new RequestWithUser
-                {
-                    RequestId = reader.GetInt32(reader.GetOrdinal("RequestId")),
-                    LearnerId = reader.GetInt32(reader.GetOrdinal("LearnerId")),
-                    SkillName = reader.GetString(reader.GetOrdinal("SkillName")),
-                    Topic = reader.IsDBNull(reader.GetOrdinal("Topic")) ? null : reader.GetString(reader.GetOrdinal("Topic")),
-                    Status = reader.GetString(reader.GetOrdinal("Status")),
-                    CreatedAt = reader.GetDateTime(reader.GetOrdinal("CreatedAt")),
-                    Description = reader.IsDBNull(reader.GetOrdinal("Description")) ? null : reader.GetString(reader.GetOrdinal("Description")),
-                    FullName = reader.GetString(reader.GetOrdinal("FullName")),
-                    Email = reader.GetString(reader.GetOrdinal("Email"))
-                });
-            }
+                list.Add(ReadRequestWithUser(reader));
+
             return list;
         }
+        public void RemovePreferredTutor(int requestId)
+        {
+            using var conn = _dbHelper.GetConnection();
+            conn.Open();
+            using var cmd = new SqlCommand(
+                "UPDATE Requests SET PreferredTutorId = NULL, IsPrivate = 0 WHERE RequestId = @id",
+                conn);
+            cmd.Parameters.AddWithValue("@id", requestId);
+            cmd.ExecuteNonQuery();
+        }
+        public void CancelDirected(int requestId)
+        {
+            using var conn = _dbHelper.GetConnection();
+            conn.Open();
+            using var tx = conn.BeginTransaction();
+
+            try
+            {
+                using (var cmd = new SqlCommand(
+                    @"UPDATE Requests
+                    SET Status = 'CANCELLED',
+                        PreferredTutorId = NULL,
+                        IsPrivate = 0
+                    WHERE RequestId = @id", conn, tx))
+                {
+                    cmd.Parameters.AddWithValue("@id", requestId);
+                    cmd.ExecuteNonQuery();
+                }
+
+                tx.Commit();
+            }
+            catch
+            {
+                tx.Rollback();
+                throw;
+            }
+        }
+
+
+
     }
 }

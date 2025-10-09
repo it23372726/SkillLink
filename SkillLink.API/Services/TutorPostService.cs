@@ -69,9 +69,9 @@ namespace SkillLink.API.Services
         }
 
         /* ---------- Schedule ---------- */
-        public void Schedule(int postId, DateTime scheduledAt)
+        public void Schedule(int postId, ScheduleTutorPostDto body)
         {
-            _repo.Schedule(postId, scheduledAt);
+            _repo.Schedule(postId, body);
         }
 
         /* ---------- Update (Owner only) ---------- */
@@ -105,5 +105,26 @@ namespace SkillLink.API.Services
 
             _repo.Delete(postId);
         }
+
+        public bool HasUserAccepted(int postId, int userId)
+    {
+        // Ensure post exists; keeps parity with controller 404 behavior if you want
+        var meta = _repo.GetPostMeta(postId);
+        if (meta is null) throw new KeyNotFoundException("Post not found.");
+
+        return _repo.IsParticipant(postId, userId);
+    }
+
+    public IDictionary<int, bool> GetAcceptedMapForUser(IEnumerable<int> postIds, int userId)
+    {
+        var ids = postIds?.Distinct().ToList() ?? new List<int>();
+        if (ids.Count == 0) return new Dictionary<int, bool>();
+
+        var acceptedIds = _repo.GetAcceptedPostIdsForUser(userId, ids); // HashSet<int>
+        var map = new Dictionary<int, bool>(ids.Count);
+        foreach (var id in ids)
+            map[id] = acceptedIds.Contains(id);
+        return map;
+    }
     }
 }
