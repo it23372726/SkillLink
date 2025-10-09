@@ -1,0 +1,43 @@
+name: SkillLink Unit Tests
+
+on:
+  pull_request:
+    branches: [ main, dev ]
+  workflow_dispatch:
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          SA_PASSWORD: "Your_strong_Passw0rd!"
+          ACCEPT_EULA: "Y"
+        ports:
+          - 1433:1433
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Wait for SQL Server
+        run: sleep 30
+
+      - name: Configure DB Connection
+        run: echo "ConnectionStrings__DefaultConnection=Server=localhost,1433;Database=SkillLinkTestDB;User Id=sa;Password=Your_strong_Passw0rd!;" >> $GITHUB_ENV
+
+      - name: Run Unit Tests
+        run: dotnet test --no-build --verbosity normal --collect:"XPlat Code Coverage"
+
+      - name: Upload Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: '**/TestResults/*'
