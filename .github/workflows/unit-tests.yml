@@ -33,7 +33,8 @@ jobs:
         run: echo "ConnectionStrings__DefaultConnection=Server=localhost,1433;Database=SkillLinkTestDB;User Id=sa;Password=Your_strong_Passw0rd!;" >> $GITHUB_ENV
 
       - name: Run Unit Tests
-        run: dotnet test --no-build --verbosity normal --collect:"XPlat Code Coverage"
+        run: dotnet test SkillLink.sln --no-build --verbosity normal --collect:"XPlat Code Coverage"
+
 
       - name: Upload Test Results
         if: always()
