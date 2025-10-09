@@ -43,7 +43,7 @@ namespace SkillLink.API.Repositories
             cmd.ExecuteNonQuery();
         }
 
-        public List<TutorPostWithUser> GetAll()
+       public List<TutorPostWithUser> GetAll()
         {
             var list = new List<TutorPostWithUser>();
             using var conn = _dbHelper.GetConnection();
@@ -52,7 +52,7 @@ namespace SkillLink.API.Repositories
             var sql = @"
                 SELECT 
                     p.PostId, p.TutorId, p.Title, p.Description, p.MaxParticipants, p.Status, 
-                    p.CreatedAt, p.ScheduledAt, p.ImageUrl,
+                    p.CreatedAt, p.ScheduledAt, p.ImageUrl, p.MeetingLink,      -- 👈 add here
                     u.FullName AS TutorName, u.Email,
                     (SELECT COUNT(*) FROM TutorPostParticipants tp WHERE tp.PostId = p.PostId) AS CurrentParticipants
                 FROM TutorPosts p
@@ -74,6 +74,7 @@ namespace SkillLink.API.Repositories
                     CreatedAt = reader.GetDateTime(reader.GetOrdinal("CreatedAt")),
                     ScheduledAt = reader.IsDBNull(reader.GetOrdinal("ScheduledAt")) ? (DateTime?)null : reader.GetDateTime(reader.GetOrdinal("ScheduledAt")),
                     ImageUrl = reader.IsDBNull(reader.GetOrdinal("ImageUrl")) ? null : reader.GetString(reader.GetOrdinal("ImageUrl")),
+                    MeetingLink = reader.IsDBNull(reader.GetOrdinal("MeetingLink")) ? "" : reader.GetString(reader.GetOrdinal("MeetingLink")), // 👈 map
                     TutorName = reader.GetString(reader.GetOrdinal("TutorName")),
                     Email = reader.GetString(reader.GetOrdinal("Email")),
                     CurrentParticipants = reader.GetInt32(reader.GetOrdinal("CurrentParticipants"))
@@ -90,7 +91,7 @@ namespace SkillLink.API.Repositories
             var sql = @"
                 SELECT 
                     p.PostId, p.TutorId, p.Title, p.Description, p.MaxParticipants, p.Status,
-                    p.CreatedAt, p.ScheduledAt, p.ImageUrl,
+                    p.CreatedAt, p.ScheduledAt, p.ImageUrl, p.MeetingLink,      -- 👈 add here
                     u.FullName AS TutorName, u.Email,
                     (SELECT COUNT(*) FROM TutorPostParticipants tp WHERE tp.PostId = p.PostId) AS CurrentParticipants
                 FROM TutorPosts p
@@ -114,6 +115,7 @@ namespace SkillLink.API.Repositories
                 CreatedAt = reader.GetDateTime(reader.GetOrdinal("CreatedAt")),
                 ScheduledAt = reader.IsDBNull(reader.GetOrdinal("ScheduledAt")) ? (DateTime?)null : reader.GetDateTime(reader.GetOrdinal("ScheduledAt")),
                 ImageUrl = reader.IsDBNull(reader.GetOrdinal("ImageUrl")) ? null : reader.GetString(reader.GetOrdinal("ImageUrl")),
+                MeetingLink = reader.IsDBNull(reader.GetOrdinal("MeetingLink")) ? "" : reader.GetString(reader.GetOrdinal("MeetingLink")), // 👈 map
                 TutorName = reader.GetString(reader.GetOrdinal("TutorName")),
                 Email = reader.GetString(reader.GetOrdinal("Email")),
                 CurrentParticipants = reader.GetInt32(reader.GetOrdinal("CurrentParticipants"))
@@ -181,15 +183,25 @@ namespace SkillLink.API.Repositories
             upd.ExecuteNonQuery();
         }
 
-        public void Schedule(int postId, DateTime scheduledAt)
+        public void Schedule(int postId, ScheduleTutorPostDto body)
         {
             using var conn = _dbHelper.GetConnection();
             conn.Open();
 
             var cmd = new SqlCommand(
-                "UPDATE TutorPosts SET Status='Scheduled', ScheduledAt=@dt WHERE PostId=@pid", conn);
+                @"UPDATE TutorPosts 
+                  SET Status = 'Scheduled', 
+                      ScheduledAt = @dt, 
+                      MeetingLink = @link 
+                  WHERE PostId = @pid", conn);
+
             cmd.Parameters.AddWithValue("@pid", postId);
-            cmd.Parameters.AddWithValue("@dt", scheduledAt);
+            cmd.Parameters.AddWithValue("@dt", body.ScheduledAt);
+
+            // Treat empty/whitespace link as NULL in DB (optional but nice)
+            var link = string.IsNullOrWhiteSpace(body.MeetingLink) ? (object)DBNull.Value : body.MeetingLink;
+            cmd.Parameters.AddWithValue("@link", link);
+
             cmd.ExecuteNonQuery();
         }
 
@@ -239,5 +251,41 @@ namespace SkillLink.API.Repositories
             del.Parameters.AddWithValue("@pid", postId);
             del.ExecuteNonQuery();
         }
+        public HashSet<int> GetAcceptedPostIdsForUser(int userId, IEnumerable<int> postIds)
+        {
+            var ids = postIds.Distinct().ToList();
+            var result = new HashSet<int>();
+            if (ids.Count == 0) return result;
+
+            using var conn = _dbHelper.GetConnection();
+            conn.Open();
+
+            // Build a parameterized IN (...) list
+            var paramNames = new List<string>(ids.Count);
+            var cmd = new SqlCommand();
+            cmd.Connection = conn;
+
+            for (int i = 0; i < ids.Count; i++)
+            {
+                var p = "@p" + i;
+                paramNames.Add(p);
+                cmd.Parameters.AddWithValue(p, ids[i]);
+            }
+            cmd.Parameters.AddWithValue("@uid", userId);
+
+            cmd.CommandText = $@"
+                SELECT DISTINCT PostId
+                FROM TutorPostParticipants
+                WHERE UserId = @uid AND PostId IN ({string.Join(",", paramNames)})
+            ";
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add(reader.GetInt32(0));
+            }
+            return result;
+        }
+
     }
 }

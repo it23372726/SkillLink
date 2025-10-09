@@ -2,6 +2,7 @@ using Microsoft.Data.SqlClient;
 using SkillLink.API.Data;
 using SkillLink.API.Models;
 using SkillLink.API.Repositories.Abstractions;
+using SkillLink.API.Dtos.Auth;
 
 namespace SkillLink.API.Repositories
 {
@@ -9,6 +10,72 @@ namespace SkillLink.API.Repositories
     {
         private readonly DbHelper _db;
         public FriendshipRepository(DbHelper db) => _db = db;
+
+        public async Task<List<UserSummaryDto>> GetFollowersAsync(int userId)
+        {
+            // Followers of X: users WHERE Friendships.FollowingId = X
+            const string sql = @"
+                SELECT u.UserId, u.FullName, u.ProfilePicture, u.Location, u.ReadyToTeach
+                FROM Friendships f
+                INNER JOIN Users u ON u.UserId = f.FollowerId
+                WHERE f.FollowedId = @UserId
+                ORDER BY u.FullName ASC;";
+
+            var list = new List<UserSummaryDto>();
+
+            await using var conn = _db.GetConnection();
+            await conn.OpenAsync();
+
+            await using var cmd = new SqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("@UserId", userId);
+
+            await using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                list.Add(new UserSummaryDto
+                {
+                    UserId = reader.GetInt32(reader.GetOrdinal("UserId")),
+                    FullName = reader.GetString(reader.GetOrdinal("FullName")),
+                    ProfilePicture = reader.IsDBNull(reader.GetOrdinal("ProfilePicture")) ? null : reader.GetString(reader.GetOrdinal("ProfilePicture")),
+                    Location = reader.IsDBNull(reader.GetOrdinal("Location")) ? null : reader.GetString(reader.GetOrdinal("Location")),
+                    ReadyToTeach = reader.GetBoolean(reader.GetOrdinal("ReadyToTeach"))
+                });
+            }
+            return list;
+        }
+
+        public async Task<List<UserSummaryDto>> GetFollowingAsync(int userId)
+        {
+            // Following of X: users WHERE Friendships.FollowerId = X
+            const string sql = @"
+                SELECT u.UserId, u.FullName, u.ProfilePicture, u.Location, u.ReadyToTeach
+                FROM Friendships f
+                INNER JOIN Users u ON u.UserId = f.FollowedId
+                WHERE f.FollowerId = @UserId
+                ORDER BY u.FullName ASC;";
+
+            var list = new List<UserSummaryDto>();
+
+            await using var conn = _db.GetConnection();
+            await conn.OpenAsync();
+
+            await using var cmd = new SqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("@UserId", userId);
+
+            await using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                list.Add(new UserSummaryDto
+                {
+                    UserId = reader.GetInt32(reader.GetOrdinal("UserId")),
+                    FullName = reader.GetString(reader.GetOrdinal("FullName")),
+                    ProfilePicture = reader.IsDBNull(reader.GetOrdinal("ProfilePicture")) ? null : reader.GetString(reader.GetOrdinal("ProfilePicture")),
+                    Location = reader.IsDBNull(reader.GetOrdinal("Location")) ? null : reader.GetString(reader.GetOrdinal("Location")),
+                    ReadyToTeach = reader.GetBoolean(reader.GetOrdinal("ReadyToTeach"))
+                });
+            }
+            return list;
+        }
 
         public List<User> GetFollowersBasic(int userId)
         {

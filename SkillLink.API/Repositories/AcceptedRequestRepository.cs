@@ -106,21 +106,44 @@ namespace SkillLink.API.Repositories
             using var conn = _dbHelper.GetConnection();
             conn.Open();
 
-            using var cmd = new SqlCommand(
-                @"UPDATE AcceptedRequests 
-                  SET ScheduleDate = @scheduleDate, 
-                      MeetingType = @meetingType, 
-                      MeetingLink = @meetingLink, 
-                      Status = 'SCHEDULED' 
-                  WHERE AcceptedRequestId = @id",
-                conn
-            );
-            cmd.Parameters.AddWithValue("@scheduleDate", scheduleDate);
-            cmd.Parameters.AddWithValue("@meetingType", (object?)meetingType ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@meetingLink", (object?)meetingLink ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@id", acceptedRequestId);
-            cmd.ExecuteNonQuery();
+            using var tx = conn.BeginTransaction();
+            try
+            {
+                // Update the accepted record
+                using (var cmd = new SqlCommand(
+                    @"UPDATE AcceptedRequests 
+                    SET ScheduleDate = @scheduleDate, 
+                        MeetingType = @meetingType, 
+                        MeetingLink = @meetingLink, 
+                        Status = 'SCHEDULED' 
+                    WHERE AcceptedRequestId = @id", conn, tx))
+                {
+                    cmd.Parameters.AddWithValue("@scheduleDate", scheduleDate);
+                    cmd.Parameters.AddWithValue("@meetingType", (object?)meetingType ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("@meetingLink", (object?)meetingLink ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("@id", acceptedRequestId);
+                    cmd.ExecuteNonQuery();
+                }
+
+                // Also flip the parent Request to SCHEDULED so both sides see it
+                using (var cmd = new SqlCommand(
+                    @"UPDATE Requests 
+                    SET Status = 'SCHEDULED' 
+                    WHERE RequestId = (SELECT RequestId FROM AcceptedRequests WHERE AcceptedRequestId = @id)", conn, tx))
+                {
+                    cmd.Parameters.AddWithValue("@id", acceptedRequestId);
+                    cmd.ExecuteNonQuery();
+                }
+
+                tx.Commit();
+            }
+            catch
+            {
+                tx.Rollback();
+                throw;
+            }
         }
+
 
         public List<AcceptedRequestWithDetails> GetRequestsIAskedFor(int userId)
         {
@@ -164,5 +187,67 @@ namespace SkillLink.API.Repositories
 
             return list;
         }
+
+        public AcceptedRequestWithDetails? GetAcceptedMeta(int acceptedRequestId)
+        {
+            using var conn = _dbHelper.GetConnection();
+            conn.Open();
+
+            var sql = @"
+                SELECT ar.RequestId, ar.AcceptorId, r.LearnerId AS RequesterId, ar.ScheduleDate
+                FROM AcceptedRequests ar
+                JOIN Requests r ON r.RequestId = ar.RequestId
+                WHERE ar.AcceptedRequestId = @id";
+            using var cmd = new SqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("@id", acceptedRequestId);
+
+            using var rd = cmd.ExecuteReader();
+            if (!rd.Read()) return null;
+
+            return new AcceptedRequestWithDetails {
+                RequestId = rd.GetInt32(rd.GetOrdinal("RequestId")),
+                AcceptorId = rd.GetInt32(rd.GetOrdinal("AcceptorId")),
+                RequesterId = rd.GetInt32(rd.GetOrdinal("RequesterId")),
+                ScheduleDate = rd.IsDBNull(rd.GetOrdinal("ScheduleDate")) ? null : (DateTime?)rd.GetDateTime(rd.GetOrdinal("ScheduleDate")),
+                
+            };
+        }
+
+        public void Complete(int acceptedRequestId)
+        {
+            using var conn = _dbHelper.GetConnection();
+            conn.Open();
+            using var tx = conn.BeginTransaction();
+            try
+            {
+                // mark accepted row
+                using (var cmd = new SqlCommand(
+                    @"UPDATE AcceptedRequests
+                    SET Status = 'COMPLETED'
+                    WHERE AcceptedRequestId = @id", conn, tx))
+                {
+                    cmd.Parameters.AddWithValue("@id", acceptedRequestId);
+                    cmd.ExecuteNonQuery();
+                }
+
+                // mark parent request
+                using (var cmd = new SqlCommand(
+                    @"UPDATE Requests
+                    SET Status = 'COMPLETED'
+                    WHERE RequestId = (SELECT RequestId FROM AcceptedRequests WHERE AcceptedRequestId = @id)", conn, tx))
+                {
+                    cmd.Parameters.AddWithValue("@id", acceptedRequestId);
+                    cmd.ExecuteNonQuery();
+                }
+
+                tx.Commit();
+            }
+            catch
+            {
+                tx.Rollback();
+                throw;
+            }
+        }
+
     }
 }

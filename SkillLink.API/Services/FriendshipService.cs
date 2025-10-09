@@ -1,6 +1,7 @@
 using SkillLink.API.Models;
 using SkillLink.API.Repositories.Abstractions;
 using SkillLink.API.Services.Abstractions;
+using SkillLink.API.Dtos.Auth;
 
 namespace SkillLink.API.Services
 {
@@ -35,5 +36,11 @@ namespace SkillLink.API.Services
 
         public List<User> SearchUsers(string query, int currentUserId) =>
             _repo.SearchUsersBasic(query, currentUserId);
+
+        public Task<List<UserSummaryDto>> GetFollowersAsync(int userId)
+            => _repo.GetFollowersAsync(userId);
+
+        public Task<List<UserSummaryDto>> GetFollowingAsync(int userId)
+            => _repo.GetFollowingAsync(userId);
     }
 }

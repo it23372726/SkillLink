@@ -19,6 +19,15 @@ namespace SkillLink.API.Controllers
             _authService = authService;
         }
 
+        [HttpGet("users/{id:int}/public")]
+        [Authorize]
+        public async Task<IActionResult> GetPublicUser([FromRoute] int id)
+        {
+            var dto = await _authService.GetPublicUserAsync(id);
+            if (dto == null) return NotFound();
+            return Ok(dto);
+        }
+
         [HttpGet("verify-email")]
         public IActionResult VerifyEmail([FromQuery] string token)
         {

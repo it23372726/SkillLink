@@ -18,5 +18,6 @@ namespace SkillLink.API.Models
     public class ScheduleTutorPostDto
     {
         public DateTime ScheduledAt { get; set; }
+        public string MeetingLink { get; set; } = string.Empty;
     }
 }

@@ -8,6 +8,8 @@ public class Request
     public string Status { get; set; } = "OPEN";
     public DateTime CreatedAt { get; set; }
     public string? Description {get; set;}
+    public int? PreferredTutorId { get; set; } // direct to a user
+    public bool IsPrivate { get; set; } = false;
 }
 // Add to your Models namespace
 public class RequestWithUser : Request

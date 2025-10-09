@@ -56,5 +56,21 @@ namespace SkillLink.API.Controllers
             return Ok(results);
         }
 
+        // GET /api/friends/{id}/followers
+        [HttpGet("{id:int}/followers")]
+        public async Task<IActionResult> GetFollowers([FromRoute] int id)
+        {
+            var list = await _service.GetFollowersAsync(id);
+            return Ok(list);
+        }
+
+        // GET /api/friends/{id}/following
+        [HttpGet("{id:int}/following")]
+        public async Task<IActionResult> GetFollowing([FromRoute] int id)
+        {
+            var list = await _service.GetFollowingAsync(id);
+            return Ok(list);
+        }
+
     }
 }

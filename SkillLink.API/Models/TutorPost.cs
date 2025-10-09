@@ -12,6 +12,7 @@ namespace SkillLink.API.Models
         public string Status { get; set; } = "Open"; // Open | Closed | Scheduled
         public DateTime CreatedAt { get; set; } = DateTime.Now;
         public DateTime? ScheduledAt { get; set; }
+        public string MeetingLink { get; set; } = string.Empty;
 
         public string? ImageUrl { get; set; }  // <— NEW
 

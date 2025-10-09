@@ -9,5 +9,7 @@ namespace SkillLink.API.Services.Abstractions
         bool HasUserAcceptedRequest(int userId, int requestId);
         void ScheduleMeeting(int acceptedRequestId, DateTime scheduleDate, string meetingType, string meetingLink);
         List<AcceptedRequestWithDetails> GetRequestsIAskedFor(int userId);
+        AcceptedRequestWithDetails? GetAcceptedMeta(int acceptedRequestId);
+        void Complete(int acceptedRequestId);
     }
 }

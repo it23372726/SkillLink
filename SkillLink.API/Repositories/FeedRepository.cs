@@ -19,6 +19,7 @@ namespace SkillLink.API.Repositories
             bool hasSearch = !string.IsNullOrWhiteSpace(q);
             string like = $"%{q?.Trim()}%";
 
+            // The SQL query has been corrected to ensure both SELECT statements have 15 columns.
             var sql = $@"
                 SELECT *
                 FROM (
@@ -35,6 +36,8 @@ namespace SkillLink.API.Repositories
                         tp.ImageUrl AS ImageUrl,
                         tp.CreatedAt AS CreatedAt,
                         tp.Status AS Status,
+                        CAST(0 AS BIT) AS IsPrivate,           -- Added this line (placeholder for IsPrivate)
+                        NULL AS PreferredTutorId,               -- Added this line (placeholder for PreferredTutorId)
                         tp.ScheduledAt AS ScheduledAt
                     FROM TutorPosts tp
                     JOIN Users u ON u.UserId = tp.TutorId
@@ -55,6 +58,8 @@ namespace SkillLink.API.Repositories
                         NULL AS ImageUrl,
                         r.CreatedAt AS CreatedAt,
                         r.Status AS Status,
+                        r.IsPrivate AS IsPrivate,
+                        r.PreferredTutorId AS PreferredTutorId,
                         NULL AS ScheduledAt
                     FROM Requests r
                     JOIN Users u ON u.UserId = r.LearnerId
@@ -78,7 +83,9 @@ namespace SkillLink.API.Repositories
                     AuthorId = reader.GetInt32(reader.GetOrdinal("AuthorId")),
                     AuthorName = reader.GetString(reader.GetOrdinal("AuthorName")),
                     AuthorEmail = reader.GetString(reader.GetOrdinal("AuthorEmail")),
-                    AuthorPic = reader.IsDBNull(reader.GetOrdinal("AuthorPic")) ? null : reader.GetString(reader.GetOrdinal("AuthorPic")),
+                    AuthorPic = reader.IsDBNull(reader.GetOrdinal("AuthorPic")) ? "" : reader.GetString(reader.GetOrdinal("AuthorPic")),
+                    PreferredTutorId = reader.IsDBNull(reader.GetOrdinal("PreferredTutorId")) ? null : reader.GetInt32(reader.GetOrdinal("PreferredTutorId")),
+                    IsPrivate = reader.GetBoolean(reader.GetOrdinal("IsPrivate")),
                     Title = reader.GetString(reader.GetOrdinal("Title")),
                     Subtitle = reader.GetString(reader.GetOrdinal("Subtitle")),
                     Body = reader.GetString(reader.GetOrdinal("Body")),
