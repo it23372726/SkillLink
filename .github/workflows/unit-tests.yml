@@ -1,9 +1,11 @@
 name: SkillLink Unit Tests
 
 on:
+  push:
+    branches: [ main, dev ]   # ✅ Runs automatically before deployment
   pull_request:
     branches: [ main, dev ]
-  workflow_dispatch:
+  workflow_dispatch:          # ✅ Allows manual trigger from GitHub UI
 
 jobs:
   unit-tests:
@@ -19,23 +21,29 @@ jobs:
           - 1433:1433
 
     steps:
-      - uses: actions/checkout@v4
+      # Checkout repository
+      - name: Checkout code
+        uses: actions/checkout@v4
 
+      # Setup .NET 8
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
+      # Wait for SQL to be ready
       - name: Wait for SQL Server
         run: sleep 30
 
+      # Configure test database connection
       - name: Configure DB Connection
         run: echo "ConnectionStrings__DefaultConnection=Server=localhost,1433;Database=SkillLinkTestDB;User Id=sa;Password=Your_strong_Passw0rd!;" >> $GITHUB_ENV
 
+      # Run Unit Tests with Code Coverage
       - name: Run Unit Tests
         run: dotnet test SkillLink.sln --no-build --verbosity normal --collect:"XPlat Code Coverage"
 
-
+      # Upload Test Results even if tests fail
       - name: Upload Test Results
         if: always()
         uses: actions/upload-artifact@v4
