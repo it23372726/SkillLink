@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState, useCallback } from "react"
 import { useAuth } from "../context/AuthContext";
 // import api from "../api/axios";
 import { toImageUrl } from "../utils/image";
-import { useNavigate } from "react-router-dom";
+import { generatePath, useNavigate } from "react-router-dom";
 import Dock from "../components/Dock";
 import { skillsApi } from "../api";
 
@@ -116,6 +116,20 @@ const SkillsManagement = () => {
   const [filteredUsers, setFilteredUsers] = useState([]);
   const [isFiltering, setIsFiltering] = useState(false);
   const [activeExploreSkill, setActiveExploreSkill] = useState("");
+
+  const openProfile = useCallback(
+    (id) => {
+      navigate(generatePath("/u/:id", { id }));
+    },
+    [navigate]
+  );
+
+  const rowKeyDown = (e, id) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      openProfile(id);
+    }
+  };
 
   /* ------------ loaders ------------ */
   const loadSkills = useCallback(async () => {
@@ -481,7 +495,7 @@ const SkillsManagement = () => {
                       className="border border-slate-200 dark:border-slate-700 rounded-xl p-4 hover:shadow-sm transition"
                     >
                       <div className="flex items-center gap-3 mb-3">
-                        <div className="w-12 h-12 bg-slate-100 dark:bg-slate-800 rounded-full flex items-center justify-center overflow-hidden">
+                        <div  onClick={() => openProfile(u.userId)} className=" cursor-pointer w-12 h-12 bg-slate-100 dark:bg-slate-800 rounded-full flex items-center justify-center overflow-hidden">
                           {u.profilePicture ? (
                             <img src={toImageUrl(u.profilePicture)} alt={u.fullName} className="w-12 h-12 object-cover" />
                           ) : (
@@ -491,8 +505,8 @@ const SkillsManagement = () => {
                           )}
                         </div>
                         <div>
-                          <div className="font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                            {u.fullName}
+                          <div onClick={() => openProfile(u.userId)} className="font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                             <span className=" hover:text-blue-200 cursor-pointer">{u.fullName}</span>
                             {u.readyToTeach && (
                               <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-200/60 text-emerald-900 dark:bg-emerald-400/20 dark:text-emerald-200">
                                 Tutor
@@ -502,9 +516,6 @@ const SkillsManagement = () => {
                           <div className="text-xs text-slate-500 dark:text-slate-400">{u.role}</div>
                         </div>
                       </div>
-                      {u.location && (
-                        <div className="text-sm text-slate-600 dark:text-slate-400 flex items-center">📍 {u.location}</div>
-                      )}
                     </div>
                   ))}
                 </div>

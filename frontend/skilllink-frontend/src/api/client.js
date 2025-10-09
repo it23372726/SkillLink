@@ -6,6 +6,17 @@ export const parseError = (err, fallback = "Unexpected error") => {
   return err?.response?.data?.message || err?.message || fallback;
 };
 
+/* ----------------- Public Profile ----------------- */
+export const usersApi = {
+  // Backend: GET /api/auth/users/{id}/public
+  publicProfile: (userId) => http.get(`/auth/users/${userId}/public`),
+};
+
+export const socialApi = {
+  followersOf: (userId) => http.get(`/friends/${userId}/followers`),
+  followingOf: (userId) => http.get(`/friends/${userId}/following`),
+};
+
 /* ----------------- Auth ----------------- */
 export const authApi = {
   login: (email, password) => http.post("/auth/login", { email, password }),
@@ -50,6 +61,7 @@ export const feedApi = {
   addComment: (postType, postId, content) =>
     http.post(`/feed/${postType}/${postId}/comments`, { content }),
   deleteComment: (commentId) => http.delete(`/feed/comments/${commentId}`),
+  sort: (data) => http.post('/feed/sort', data),
 };
 
 /* ----------------- Requests ----------------- */
@@ -59,11 +71,16 @@ export const requestsApi = {
   update: (id, payload) => http.put(`/requests/${id}`, payload),
   remove: (id) => http.delete(`/requests/${id}`),
   accept: (id) => http.post(`/requests/${id}/accept`),
-
+  acceptedStatus: (id) => http.get(`/requests/${id}/accepted-status`),
   listAcceptedByMe: () => http.get("/requests/accepted"),
   listAcceptedAsRequester: () => http.get("/requests/accepted/requester"),
   scheduleAccepted: (acceptedRequestId, payload) =>
     http.post(`/requests/accepted/${acceptedRequestId}/schedule`, payload),
+  listAcceptedForMyRequests: () => http.get("/requests/accepted/requester"),
+  declineDirected: (id) => http.post(`/requests/${id}/decline-directed`),
+  decline: (id) => http.post(`/requests/${id}/decline`),
+  finishAccepted: (acceptedRequestId) =>
+    http.post(`/requests/accepted/${acceptedRequestId}/complete`),
 };
 
 /* ----------------- Tutor Posts ----------------- */
@@ -79,9 +96,12 @@ export const tutorPostsApi = {
       headers: { "Content-Type": "multipart/form-data" },
     });
   },
-  schedule: (postId, scheduledAtIso) =>
-    http.put(`/tutor-posts/${postId}/schedule`, { scheduledAt: scheduledAtIso }),
+  schedule: (postId, body) =>
+    http.put(`/tutor-posts/${postId}/schedule`,  body),
   accept: (postId) => http.post(`/tutor-posts/${postId}/accept`),
+  acceptedStatus: (postId) => http.get(`/tutor-posts/${postId}/accepted-status`),
+  acceptedStatusMany: (ids) =>
+    http.get(`/tutor-posts/accepted-status`, { params: { ids: ids.join(",") } }),
 };
 
 /* ----------------- Skills ----------------- */
@@ -101,4 +121,11 @@ export const friendsApi = {
   search: (q) => http.get(`/friends/search`, { params: { q } }),
   follow: (userId) => http.post(`/friends/${userId}/follow`),
   unfollow: (userId) => http.delete(`/friends/${userId}/unfollow`),
+};
+
+/* ----------------- Notification ----------------- */
+export const notificationsApi = {
+  list: () => http.get("/notifications"),
+  markRead: (id) => http.post(`/notifications/${id}/read`),
+  markAllRead: () => http.post(`/notifications/read-all`),
 };

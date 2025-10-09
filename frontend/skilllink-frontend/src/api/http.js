@@ -5,10 +5,14 @@ import axios from "axios";
 // 1) REACT_APP_API_BASE (build-time)
 // 2) window.__SL_API_BASE (runtime injection)
 // 3) fallback to http://localhost:5159
-export const API_BASE =
-  process.env.REACT_APP_API_BASE ||
-  (typeof window !== "undefined" && window.__SL_API_BASE) ||
-  "http://localhost:5159";
+
+
+// export const API_BASE =
+//   process.env.REACT_APP_API_BASE ||
+//   (typeof window !== "undefined" && window.__SL_API_BASE) ||
+//   "http://localhost:5159";
+
+  export const API_BASE = process.env.REACT_APP_API_BASE || (typeof window !== "undefined" && window.__SL_API_BASE) ||"http://localhost:5159";
 
 const http = axios.create({
   baseURL: `${API_BASE}/api`,
