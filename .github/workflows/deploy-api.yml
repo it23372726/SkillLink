@@ -3,7 +3,9 @@ name: Deploy SkillLink API
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:
+  pull_request:
+    branches: [ main ]   # ✅ Deploys on PRs targeting main
+  workflow_dispatch:      # Allows manual trigger
 
 env:
   AZURE_WEBAPP_NAME: skilllink-api-dev
