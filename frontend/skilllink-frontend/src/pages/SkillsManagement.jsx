@@ -124,13 +124,6 @@ const SkillsManagement = () => {
     [navigate]
   );
 
-  const rowKeyDown = (e, id) => {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      openProfile(id);
-    }
-  };
-
   /* ------------ loaders ------------ */
   const loadSkills = useCallback(async () => {
     const uid = user?.userId;

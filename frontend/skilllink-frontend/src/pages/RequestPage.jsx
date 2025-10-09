@@ -1,5 +1,5 @@
 // src/pages/RequestsPage.jsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import Dock from "../components/Dock";
@@ -228,10 +228,10 @@ const RequestsPane = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const isDirectedToMe = (r) => {
+  const isDirectedToMe = useCallback((r) => {
     const uid = `${user?.userId ?? ""}`;
     return r?.preferredTutorId != null && `${r.preferredTutorId}` === uid;
-  };
+  }, [user?.userId]);
 
   const loadAll = async () => {
     try {
@@ -278,7 +278,7 @@ const RequestsPane = () => {
     );
 
     return list;
-  }, [allRequests, tab, acceptedMap, searchQuery, sortBy, user?.userId]);
+  }, [allRequests, tab, acceptedMap, searchQuery, sortBy, user?.userId, isDirectedToMe]);
 
   // actions
   const acceptRequest = async (requestId) => {
