@@ -37,9 +37,10 @@ jobs:
           echo "ConnectionStrings__DefaultConnection=Server=localhost,1433;Database=SkillLinkTestDB;User Id=sa;Password=Your_strong_Passw0rd!;" >> $GITHUB_ENV
           dotnet run --project SkillLink.API/SkillLink.API.csproj --no-build &
           sleep 15
-
+      
       - name: Run Selenium Tests
-        run: dotnet test SkillLink.SeleniumTests/SkillLink.SeleniumTests.csproj --no-build --verbosity normal
+        run: dotnet test SkillLink.E2E/SkillLink.E2E.csproj --no-build --verbosity normal
+
 
       - name: Upload Selenium Test Results
         if: always()
