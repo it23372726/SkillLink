@@ -1,0 +1,49 @@
+name: SkillLink Selenium UI Tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [ main, dev ]
+
+jobs:
+  selenium-tests:
+    runs-on: ubuntu-latest
+
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          SA_PASSWORD: "Your_strong_Passw0rd!"
+          ACCEPT_EULA: "Y"
+        ports:
+          - 1433:1433
+      selenium:
+        image: selenium/standalone-chrome
+        ports: [ "4444:4444" ]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Wait for SQL Server
+        run: sleep 25
+
+      - name: Start SkillLink API
+        run: |
+          echo "ConnectionStrings__DefaultConnection=Server=localhost,1433;Database=SkillLinkTestDB;User Id=sa;Password=Your_strong_Passw0rd!;" >> $GITHUB_ENV
+          dotnet run --project SkillLink.API/SkillLink.API.csproj --no-build &
+          sleep 15
+
+      - name: Run Selenium Tests
+        run: dotnet test SkillLink.SeleniumTests/SkillLink.SeleniumTests.csproj --no-build --verbosity normal
+
+      - name: Upload Selenium Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selenium-test-results
+          path: '**/TestResults/*'
