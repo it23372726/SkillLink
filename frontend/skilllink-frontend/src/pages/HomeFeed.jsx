@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, useCallback } from "react";
+import React, { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { useAuth } from "../context/AuthContext";
 import { generatePath, useNavigate } from "react-router-dom";
 import Dock from "../components/Dock";
@@ -60,7 +60,7 @@ const PostCard = ({ item, onLike, onDislike, onRemoveReaction, onAccept }) => {
   const requestAcceptable = item.postType === "REQUEST" && !["COMPLETED", "CANCELLED", "CLOSED"].includes(norm(item.status)) && !isOwner;
   const canAccept = lessonAcceptable || requestAcceptable;
 
-  const loadComments = async () => {
+  const loadComments = useCallback(async () => {
     setLoadingComments(true);
     try {
       const res = await feedApi.listComments(item.postType, item.postId, { limit: 20, sort: "asc" });
@@ -68,12 +68,30 @@ const PostCard = ({ item, onLike, onDislike, onRemoveReaction, onAccept }) => {
     } finally {
       setLoadingComments(false);
     }
-  };
+  }, [item.postType, item.postId]);
 
-  const toggleComments = async () => {
-    if (!openComments) await loadComments();
+  const loadPreview = useCallback(async () => {
+    if (!item?.commentCount || item.commentCount <= 0) {
+      setPreview(null);
+      return;
+    }
+    setLoadingPreview(true);
+    try {
+      const res = await feedApi.listComments(item.postType, item.postId, { limit: 1, sort: "desc" });
+      setPreview(res.data?.[0] || null);
+    } catch {
+      setPreview(null);
+    } finally {
+      setLoadingPreview(false);
+    }
+  }, [item.commentCount, item.postType, item.postId]);
+
+  const toggleComments = useCallback(async () => {
+    if (!openComments) {
+      await loadComments();
+    }
     setOpenComments((v) => !v);
-  };
+  }, [openComments, loadComments]);
 
   const addComment = async (e) => {
     e.preventDefault();
@@ -99,30 +117,13 @@ const PostCard = ({ item, onLike, onDislike, onRemoveReaction, onAccept }) => {
     }
   };
 
-  const loadPreview = useCallback(async () => {
-    if (!item?.commentCount || item.commentCount <= 0) {
-      setPreview(null);
-      return;
-    }
-    setLoadingPreview(true);
-    try {
-      const res = await feedApi.listComments(item.postType, item.postId, { limit: 1, sort: "desc" });
-      const arr = res.data || [];
-      setPreview(arr.length > 0 ? arr[0] : null);
-    } catch {
-      setPreview(null);
-    } finally {
-      setLoadingPreview(false);
-    }
-  }, [item?.commentCount, item?.postId, item?.postType]);
-
   useEffect(() => {
     if (item?.commentCount > 0 && !openComments) {
       loadPreview();
     } else {
       setPreview(null);
     }
-  }, [item?.commentCount, item?.postId, openComments, loadPreview]);
+  }, [item?.commentCount, openComments, loadPreview]);
 
   return (
     <GlassCard className="p-4">
@@ -142,7 +143,7 @@ const PostCard = ({ item, onLike, onDislike, onRemoveReaction, onAccept }) => {
           <div className="text-xs text-slate-500 dark:text-slate-400">
             {new Date(item.createdAt).toLocaleString()}
             {item.scheduledAt && (
-              <span className="ml-2 text-blue-600 dark:text-blue-400">· Scheduled: {new Date(item.scheduledAt).toLocaleString()}</span>
+              <span className="ml-2 text-blue-600 dark:text-blue-400">· Scheduled: {new Date(item.scheduledAt).toLocaleString('en-LK')}</span>
             )}
           </div>
         </div>
@@ -238,6 +239,7 @@ const PostCard = ({ item, onLike, onDislike, onRemoveReaction, onAccept }) => {
   );
 };
 
+// --- FIX: Moved constants and helpers outside the component ---
 const debounce = (fn, ms = 450) => {
   let t;
   return (...args) => {
@@ -247,6 +249,9 @@ const debounce = (fn, ms = 450) => {
 };
 
 const acceptedStatusSet = new Set(["SCHEDULED", "CLOSED", "COMPLETED", "ACCEPTED"]);
+const PAGE_SIZE = 8;
+const norm = (s) => (s || "").toUpperCase();
+const keyOf = (it) => `${it.postType}-${it.postId}`;
 
 /* ---- Page ---- */
 const HomeFeed = () => {
@@ -255,7 +260,8 @@ const HomeFeed = () => {
 
   const [meUser, setMeUser] = useState(null);
   const [loadingMe, setLoadingMe] = useState(true);
-  const [feedTab, setFeedTab] = useState("POSTS"); // "POSTS" | "REQUESTS"
+  const [feedTab, setFeedTab] = useState("POSTS");
+  const isLoading = useRef(false);
 
   // State for posts
   const [posts, setPosts] = useState([]);
@@ -292,14 +298,15 @@ const HomeFeed = () => {
     return () => { ignore = true; };
   }, [authUser?.userId]);
 
-  const PAGE_SIZE = 8;
-  const norm = (s) => (s || "").toUpperCase();
-  const keyOf = (it) => `${it.postType}-${it.postId}`;
-
   // Function to load posts (LESSON)
   const loadPosts = useCallback(async (p = 1, qStr = "") => {
-    if (busy || (p > 1 && postsDone)) return;
+    // 1. Check the REF, not the state, to prevent the dependency cycle
+    if (isLoading.current || (p > 1 && postsDone)) return;
+
+    // 2. Set both the ref and the state
+    isLoading.current = true;
     setBusy(true);
+
     try {
       const res = await feedApi.list({ page: p, pageSize: PAGE_SIZE, q: qStr, postType: "LESSON", statusNot: "COMPLETED" });
       const raw = res.data || [];
@@ -322,21 +329,24 @@ const HomeFeed = () => {
       setPosts((prev) => (p === 1 ? merged : [...prev, ...merged]));
       setPostsPage(p);
     } finally {
+      // 3. Set both back to false
+      isLoading.current = false;
       setBusy(false);
       setPostsInitialLoaded(true);
     }
-  }, [busy, postsDone]); // Add dependencies used inside the function
+  }, [postsDone]); // <-- The dependency array is now correct and stable!
 
-  // Function to load requests (REQUEST)
   const loadRequests = useCallback(async (p = 1, qStr = "") => {
-    if (busy || (p > 1 && requestsDone)) return;
+    // 1. Check the REF, not the state
+    if (isLoading.current || (p > 1 && requestsDone)) return;
+
+    // 2. Set both the ref and the state
+    isLoading.current = true;
     setBusy(true);
+    
     try {
-      // 1. Fetch the initial list of requests
       const res = await feedApi.list({ page: p, pageSize: PAGE_SIZE, q: qStr, postType: "REQUEST", statusNot: "COMPLETED", isPrivate: false });
       const raw = res.data || [];
-
-      // 2. Perform client-side filtering as a safeguard
       const filtered = raw.filter((it) => {
         const isCorrectType = it.postType === "REQUEST";
         const isNotCompleted = norm(it.status) !== "COMPLETED";
@@ -345,37 +355,32 @@ const HomeFeed = () => {
       });
 
       let finalData = filtered;
-
-      // 3. If there are requests, send them to the backend to be sorted
       if (filtered.length > 0) {
         try {
           const sortResponse = await feedApi.sort(filtered);
-          // Use the sorted data from the API if the call is successful
           finalData = sortResponse.data || filtered; 
         } catch (error) {
           console.error("Could not sort requests, displaying unsorted:", error);
-          // If sorting fails, we'll just use the unsorted 'filtered' data
           finalData = filtered;
         }
       }
 
-      // 4. Augment the final (sorted or unsorted) data with client-side status
       const merged = finalData.map((it) => ({
         ...it,
         accepted: acceptedStatusSet.has(norm(it.status)),
       }));
       
       if (raw.length < PAGE_SIZE) setRequestsDone(true);
-
-      // 5. Set the state with the final, processed data
       setRequests((prev) => (p === 1 ? merged : [...prev, ...merged]));
       setRequestsPage(p);
 
     } finally {
+      // 3. Set both back to false
+      isLoading.current = false;
       setBusy(false);
       setRequestsInitialLoaded(true);
     }
-  }, [busy, requestsDone]); // Add dependencies used inside the function
+  }, [requestsDone]); // <-- The dependency array is now correct and stable!
   
   // Initial load and tab switching
   useEffect(() => {
@@ -384,9 +389,8 @@ const HomeFeed = () => {
     } else if (feedTab === "REQUESTS" && !requestsInitialLoaded) {
       loadRequests(1, liveQ);
     }
-  }, [feedTab, postsInitialLoaded, requestsInitialLoaded, liveQ, loadPosts, loadRequests]); // Added loadPosts and loadRequests
+  }, [feedTab, postsInitialLoaded, requestsInitialLoaded, liveQ, loadPosts, loadRequests]);
   
-
   // Search refresh
   useEffect(() => {
     setPostsDone(false);
