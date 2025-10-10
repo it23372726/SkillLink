@@ -359,6 +359,7 @@ const HomeFeed = () => {
         try {
           const sortResponse = await feedApi.sort(filtered);
           finalData = sortResponse.data || filtered; 
+          console.log("sort : ",finalData);
         } catch (error) {
           console.error("Could not sort requests, displaying unsorted:", error);
           finalData = filtered;
