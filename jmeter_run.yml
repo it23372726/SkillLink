@@ -1,0 +1,49 @@
+name: Jmeter_Run
+on:
+
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+  workflow_dispatch:
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  build:
+    # The type of runner that the job will run on
+    runs-on: ubuntu-latest
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+     
+      - uses: actions/checkout@v4
+      
+name: run jmeter on github action
+description: automation with JMeter
+author: lahiru ranjana
+
+runs:
+  using: "composite"
+  steps:
+    - run: |
+       java -version
+       wget https://downloads.apache.org//jmeter/binaries/apache-jmeter-5.6.3.zip
+       unzip apache-jmeter-5.6.3.zip
+       cd apache-jmeter-5.6.3/bin
+       ./jmeter -v
+       pwd
+       cd $GITHUB_WORKSPACE/apache-jmeter-5.6.3
+       wget -q --no-check-certificate https://jmeter-plugins.org/files/packages/jpgc-dummy-0.4.zip  -P .
+       unzip -o jpgc-dummy-0.4.zip  && rm jpgc-dummy-0.4.zip
+       cd $GITHUB_WORKSPACE/apache-jmeter-5.6.3/bin
+        for i in $( ls $GITHUB_WORKSPACE/*.jmx); do
+           ./jmeter -n -t $i;
+         done
+      shell: bash
+
+
+branding:
+  color: green
+  icon: power
