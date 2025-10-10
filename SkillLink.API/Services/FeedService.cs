@@ -47,17 +47,12 @@ namespace SkillLink.API.Services
         {
             // Step A: Get all skills from the user's profile.
             var myUserSkills = _skillRepo.GetUserSkillsWithSkill(me);
-            foreach (var item in myUserSkills)
-            {
-                Console.WriteLine("myUserSkills: " + item.Skill.Name);
-            }
             
 
             // Step B: Create a HashSet of skill names for efficient lookups.
             var mySkillNames = myUserSkills
                 .Select(userSkill => userSkill.Skill.Name)
                 .ToHashSet();
-            Console.WriteLine("myskillsName : " + string.Join(", ", mySkillNames));
 
             if (!mySkillNames.Any())
             {
@@ -71,8 +66,6 @@ namespace SkillLink.API.Services
                 .OrderByDescending(item => mySkillNames.Contains(item.Title)) // Items matching a profile skill come first
                 .ThenByDescending(item => item.CreatedAt) // Then sort by most recent
                 .ToList();
-            var sortedTitles = sortedList.Select(item => item.Title);
-            Console.WriteLine("SORTED DATA Titles: " + string.Join(", ", sortedTitles));
 
             return sortedList;
         }
