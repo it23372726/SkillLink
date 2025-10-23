@@ -16,9 +16,7 @@ namespace SkillLink.API.Services
         public void AcceptRequest(int requestId, int acceptorId)
         {
             if (_repo.HasUserAcceptedRequest(acceptorId, requestId))
-            {
                 throw new InvalidOperationException("Request already accepted");
-            }
             _repo.InsertAcceptance(requestId, acceptorId);
         }
 
@@ -36,7 +34,11 @@ namespace SkillLink.API.Services
 
         public List<AcceptedRequestWithDetails> GetRequestsIAskedFor(int userId)
             => _repo.GetRequestsIAskedFor(userId);
-        public AcceptedRequestWithDetails? GetAcceptedMeta(int acceptedRequestId)
+
+        public AcceptedRequestWithDetails? GetAcceptedDetails(int acceptedRequestId)
+            => _repo.GetAcceptedDetails(acceptedRequestId);
+
+        public AcceptedMeta? GetAcceptedMeta(int acceptedRequestId)
             => _repo.GetAcceptedMeta(acceptedRequestId);
 
         public void Complete(int acceptedRequestId)

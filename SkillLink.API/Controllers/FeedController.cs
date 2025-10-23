@@ -41,6 +41,7 @@ namespace SkillLink.API.Controllers
             var userId = RequireUserId();
             var sortedData = _feed.GetSort(data, userId); // Pass the user ID to the service
             var sortedTitles = sortedData.Select(item => item.Title);
+            Console.WriteLine("SORTED DATA Controller: " + string.Join(", ", sortedTitles));
 
             return Ok(sortedData);
         }

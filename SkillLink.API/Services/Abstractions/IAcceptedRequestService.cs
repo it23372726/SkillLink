@@ -1,4 +1,6 @@
 using SkillLink.API.Models;
+using System.Collections.Generic;
+
 namespace SkillLink.API.Services.Abstractions
 {
     public interface IAcceptedRequestService
@@ -9,7 +11,10 @@ namespace SkillLink.API.Services.Abstractions
         bool HasUserAcceptedRequest(int userId, int requestId);
         void ScheduleMeeting(int acceptedRequestId, DateTime scheduleDate, string meetingType, string meetingLink);
         List<AcceptedRequestWithDetails> GetRequestsIAskedFor(int userId);
-        AcceptedRequestWithDetails? GetAcceptedMeta(int acceptedRequestId);
+
+        AcceptedRequestWithDetails? GetAcceptedDetails(int acceptedRequestId);
+        AcceptedMeta? GetAcceptedMeta(int acceptedRequestId);
+
         void Complete(int acceptedRequestId);
     }
 }

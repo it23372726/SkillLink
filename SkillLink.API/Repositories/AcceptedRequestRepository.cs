@@ -188,30 +188,78 @@ namespace SkillLink.API.Repositories
             return list;
         }
 
-        public AcceptedRequestWithDetails? GetAcceptedMeta(int acceptedRequestId)
+                public AcceptedRequestWithDetails? GetAcceptedDetails(int acceptedRequestId)
         {
             using var conn = _dbHelper.GetConnection();
             conn.Open();
 
             var sql = @"
-                SELECT ar.RequestId, ar.AcceptorId, r.LearnerId AS RequesterId, ar.ScheduleDate
+                SELECT 
+                    ar.*, 
+                    r.SkillName, r.Topic, r.Description,
+                    uReq.FullName as RequesterName, uReq.Email as RequesterEmail, r.LearnerId as RequesterId
+                FROM AcceptedRequests ar
+                JOIN Requests r ON r.RequestId = ar.RequestId
+                JOIN Users uReq ON uReq.UserId = r.LearnerId
+                WHERE ar.AcceptedRequestId = @id";
+
+            using var cmd = new SqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("@id", acceptedRequestId);
+
+            using var reader = cmd.ExecuteReader();
+            if (!reader.Read()) return null;
+
+            return new AcceptedRequestWithDetails
+            {
+                AcceptedRequestId = reader.GetInt32(reader.GetOrdinal("AcceptedRequestId")),
+                RequestId = reader.GetInt32(reader.GetOrdinal("RequestId")),
+                AcceptorId = reader.GetInt32(reader.GetOrdinal("AcceptorId")),
+                AcceptedAt = reader.GetDateTime(reader.GetOrdinal("AcceptedAt")),
+                Status = reader.GetString(reader.GetOrdinal("Status")),
+                ScheduleDate = reader.IsDBNull(reader.GetOrdinal("ScheduleDate")) ? null : (DateTime?)reader.GetDateTime(reader.GetOrdinal("ScheduleDate")),
+                MeetingType = reader.IsDBNull(reader.GetOrdinal("MeetingType")) ? "" : reader.GetString(reader.GetOrdinal("MeetingType")),
+                MeetingLink = reader.IsDBNull(reader.GetOrdinal("MeetingLink")) ? "" : reader.GetString(reader.GetOrdinal("MeetingLink")),
+                SkillName = reader.IsDBNull(reader.GetOrdinal("SkillName")) ? "" : reader.GetString(reader.GetOrdinal("SkillName")),
+                Topic = reader.IsDBNull(reader.GetOrdinal("Topic")) ? "" : reader.GetString(reader.GetOrdinal("Topic")),
+                Description = reader.IsDBNull(reader.GetOrdinal("Description")) ? "" : reader.GetString(reader.GetOrdinal("Description")),
+                RequesterName = reader.IsDBNull(reader.GetOrdinal("RequesterName")) ? "" : reader.GetString(reader.GetOrdinal("RequesterName")),
+                RequesterEmail = reader.IsDBNull(reader.GetOrdinal("RequesterEmail")) ? "" : reader.GetString(reader.GetOrdinal("RequesterEmail")),
+                RequesterId = reader.GetInt32(reader.GetOrdinal("RequesterId"))
+            };
+        }
+
+        public AcceptedMeta? GetAcceptedMeta(int acceptedRequestId)
+        {
+            using var conn = _dbHelper.GetConnection();
+            conn.Open();
+
+            var sql = @"
+                SELECT 
+                    ar.AcceptedRequestId,
+                    ar.RequestId, 
+                    r.LearnerId AS RequesterId, 
+                    ar.AcceptorId, 
+                    ar.Status
                 FROM AcceptedRequests ar
                 JOIN Requests r ON r.RequestId = ar.RequestId
                 WHERE ar.AcceptedRequestId = @id";
+
             using var cmd = new SqlCommand(sql, conn);
             cmd.Parameters.AddWithValue("@id", acceptedRequestId);
 
             using var rd = cmd.ExecuteReader();
             if (!rd.Read()) return null;
 
-            return new AcceptedRequestWithDetails {
-                RequestId = rd.GetInt32(rd.GetOrdinal("RequestId")),
-                AcceptorId = rd.GetInt32(rd.GetOrdinal("AcceptorId")),
-                RequesterId = rd.GetInt32(rd.GetOrdinal("RequesterId")),
-                ScheduleDate = rd.IsDBNull(rd.GetOrdinal("ScheduleDate")) ? null : (DateTime?)rd.GetDateTime(rd.GetOrdinal("ScheduleDate")),
-                
+            return new AcceptedMeta
+            {
+                AcceptedRequestId = rd.GetInt32(rd.GetOrdinal("AcceptedRequestId")),
+                RequestId    = rd.GetInt32(rd.GetOrdinal("RequestId")),
+                RequesterId  = rd.GetInt32(rd.GetOrdinal("RequesterId")),
+                AcceptorId   = rd.GetInt32(rd.GetOrdinal("AcceptorId")),
+                Status       = rd.IsDBNull(rd.GetOrdinal("Status")) ? "" : rd.GetString(rd.GetOrdinal("Status"))
             };
         }
+
 
         public void Complete(int acceptedRequestId)
         {

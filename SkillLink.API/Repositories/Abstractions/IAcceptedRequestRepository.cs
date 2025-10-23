@@ -1,4 +1,5 @@
 using SkillLink.API.Models;
+using System.Collections.Generic;
 
 namespace SkillLink.API.Repositories.Abstractions
 {
@@ -13,7 +14,13 @@ namespace SkillLink.API.Repositories.Abstractions
         void ScheduleMeeting(int acceptedRequestId, DateTime scheduleDate, string meetingType, string meetingLink);
 
         List<AcceptedRequestWithDetails> GetRequestsIAskedFor(int userId);
-        AcceptedRequestWithDetails? GetAcceptedMeta(int acceptedRequestId);
+
+        // Keep the rich details method if you use it elsewhere…
+        AcceptedRequestWithDetails? GetAcceptedDetails(int acceptedRequestId);
+
+        // …but expose a focused meta for cross-service validations.
+        AcceptedMeta? GetAcceptedMeta(int acceptedRequestId);
+
         void Complete(int acceptedRequestId);
     }
 }
