@@ -5,6 +5,7 @@ import { toImageUrl } from "../utils/image";
 import { generatePath, useNavigate } from "react-router-dom";
 import Dock from "../components/Dock";
 import { skillsApi } from "../api";
+import SettingsMenu from "../components/SettingsMenu";
 
 /* -------------------------- utils -------------------------- */
 const debounce = (fn, delay = 300) => {
@@ -282,8 +283,9 @@ const SkillsManagement = () => {
               <div className="text-slate-700 dark:text-slate-200 font-semibold">SkillLink</div>
             </div>
 
-            <div className="flex mr-24 items-center text-xs text-slate-500 dark:text-slate-400">
+            <div className="flex gap-5 mr-24 items-center text-xs text-slate-500 dark:text-slate-400">
               <p>Skills</p>
+              <SettingsMenu/>
             </div>
           </div>
         </GlassBar>

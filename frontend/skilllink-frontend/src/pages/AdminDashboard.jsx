@@ -1,3 +1,4 @@
+// src/pages/AdminDashboard.jsx
 import React, {
   useEffect,
   useMemo,
@@ -9,6 +10,7 @@ import { useNavigate } from "react-router-dom";
 import Dock from "../components/Dock";
 import { useAuth } from "../context/AuthContext";
 import { adminApi } from "../api";
+import SettingsMenu from "../components/SettingsMenu";
 
 /* ========================== Utilities ========================== */
 const debounce = (fn, ms = 400) => {
@@ -25,7 +27,7 @@ const toCSV = (rows) => {
   if (!rows?.length) return "";
   const headers = Object.keys(rows[0]);
   const escape = (v) =>
-    `"${String(v ?? "").replaceAll('"', '""').replaceAll("\n", " ")}`;
+    `"${String(v ?? "").replaceAll('"', '""').replaceAll("\n", " ")}"`;
   const lines = [headers.map(escape).join(",")];
   for (const r of rows) lines.push(headers.map((h) => escape(r[h])).join(","));
   return lines.join("\n");
@@ -168,7 +170,7 @@ const SkeletonRow = () => (
   </tr>
 );
 
-/* ========================== Donut Chart ========================== */
+/* ========================== Donut Chart (existing) ========================== */
 const Donut = ({ segments = [], size = 140, stroke = 18 }) => {
   const total = segments.reduce((a, b) => a + b.value, 0) || 1;
   const r = (size - stroke) / 2;
@@ -253,6 +255,26 @@ const AdminDashboard = () => {
   // delete loading state
   const [deletingId, setDeletingId] = useState(null);
 
+  // ---------- NEW: Skill demand report state ----------
+  const [skillsReport, setSkillsReport] = useState([]);
+  const [loadingReport, setLoadingReport] = useState(true);
+  const [reportLimit, setReportLimit] = useState(10);
+  const [rangeDays, setRangeDays] = useState(90); // 30/90/365/0 (0 = All time)
+
+  // ---------- NEW: Feedback modal state ----------
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbacks, setFeedbacks] = useState([]);
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
+  const [feedbackErr, setFeedbackErr] = useState("");
+  const [feedbackHasUnread, setFeedbackHasUnread] = useState(false);
+
+  const [fbFilter, setFbFilter] = useState("ALL"); // ALL | UNREAD | READ
+  const [fbQ, setFbQ] = useState("");
+  const [fbFrom, setFbFrom] = useState(""); // yyyy-mm-dd
+  const [fbTo, setFbTo] = useState("");
+  const [fbPage, setFbPage] = useState(1);
+  const FB_PAGE_SIZE = 8;
+
   // dark mode persist
   useEffect(() => {
     const t = localStorage.theme;
@@ -299,6 +321,32 @@ const AdminDashboard = () => {
   useEffect(() => {
     load();
   }, [load]);
+
+  // ---------- NEW: load skill demand ----------
+  const loadSkillsReport = useCallback(async () => {
+    try {
+      setLoadingReport(true);
+      const params = { limit: reportLimit };
+      if (rangeDays && rangeDays > 0) {
+        const to = new Date();
+        const from = new Date(to.getTime() - rangeDays * 24 * 60 * 60 * 1000);
+        params.from = from.toISOString();
+        params.to = to.toISOString();
+      }
+      const res = await adminApi.topSkills(params);
+      setSkillsReport(res.data || []);
+    } catch (e) {
+      console.error(e);
+      setSkillsReport([]);
+      showToast("error", "Failed to load skill report");
+    } finally {
+      setLoadingReport(false);
+    }
+  }, [reportLimit, rangeDays]);
+
+  useEffect(() => {
+    loadSkillsReport();
+  }, [loadSkillsReport]);
 
   /* ---------- Debounced search bound to load ---------- */
   const debouncedLoad = useMemo(() => debounce(load, 500), [load]);
@@ -387,7 +435,7 @@ const AdminDashboard = () => {
   const setRole = async (ids, role) => {
     try {
       await Promise.all(ids.map((id) => adminApi.setRole(`${id}`, `${role}`)));
-      showToast("success", "Updated role");
+    showToast("success", "Updated role");
       setBulkOpen(false);
       load();
     } catch (e) {
@@ -410,7 +458,7 @@ const AdminDashboard = () => {
     [checked]
   );
 
-  const exportCSV = () => {
+  const exportUsersCSV = () => {
     const data = filtered.map((u) => ({
       userId: u.userId,
       fullName: u.fullName,
@@ -426,6 +474,26 @@ const AdminDashboard = () => {
     const a = document.createElement("a");
     a.href = url;
     a.download = `users_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // ---------- NEW: export skill report ----------
+  const exportSkillReportCSV = () => {
+    const data = skillsReport.map((r) => ({
+      skillName: r.skillName,
+      totalRequests: r.totalRequests,
+      scheduled: r.scheduled,
+      completed: r.completed,
+      completionRate: r.totalRequests ? ((r.completed / r.totalRequests) * 100).toFixed(1) + "%" : "0%",
+      firstRequestAt: formatDate(r.firstRequestAt),
+      lastRequestAt: formatDate(r.lastRequestAt),
+    }));
+    const blob = new Blob([toCSV(data)], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `skills_report_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -485,6 +553,134 @@ const AdminDashboard = () => {
     }
   };
 
+  /* ========== NEW: Feedback fetchers, filters, actions ========== */
+  const pingFeedbackUnread = useCallback(async () => {
+    try {
+      const res = await adminApi.feedbackList({ isRead: false, limit: 1, offset: 0 });
+      const hasAny = (res.data || []).length > 0;
+      setFeedbackHasUnread(hasAny);
+    } catch (e) {
+      // non-blocking
+    }
+  }, []);
+
+  const loadFeedbacks = useCallback(async () => {
+    try {
+      setFeedbackLoading(true);
+      setFeedbackErr("");
+      // Pull a reasonable chunk; we’ll filter client-side for q/date.
+      const isReadParam =
+        fbFilter === "ALL" ? null : fbFilter === "UNREAD" ? false : true;
+      const res = await adminApi.feedbackList({
+        isRead: isReadParam,
+        limit: 400,
+        offset: 0,
+      });
+      setFeedbacks(res.data || []);
+    } catch (e) {
+      console.error(e);
+      setFeedbackErr("Failed to load feedback");
+      setFeedbacks([]);
+    } finally {
+      setFeedbackLoading(false);
+    }
+  }, [fbFilter]);
+
+  // poll unread every 30s for the alert dot
+  useEffect(() => {
+    pingFeedbackUnread();
+    const t = setInterval(pingFeedbackUnread, 30000);
+    return () => clearInterval(t);
+  }, [pingFeedbackUnread]);
+
+  const onFeedbackOpen = async () => {
+    setFeedbackOpen(true);
+    setFbPage(1);
+    await loadFeedbacks();
+    // Clear the alert dot once opened (optional)
+    setFeedbackHasUnread(false);
+  };
+
+  const markFeedbackRead = async (id, isRead) => {
+    try {
+      await adminApi.feedbackMarkRead(id, isRead);
+      setFeedbacks((prev) =>
+        prev.map((f) => (f.feedbackId === id ? { ...f, isRead } : f))
+      );
+    } catch (e) {
+      showToast("error", "Failed to update feedback");
+    }
+  };
+
+  const markAllVisibleRead = async () => {
+    try {
+      const ids = fbPageSlice.map((f) => f.feedbackId);
+      await Promise.all(ids.map((id) => adminApi.feedbackMarkRead(id, true)));
+      setFeedbacks((prev) =>
+        prev.map((f) => (ids.includes(f.feedbackId) ? { ...f, isRead: true } : f))
+      );
+      showToast("success", "Marked visible feedback as read");
+    } catch {
+      showToast("error", "Failed to mark all read");
+    }
+  };
+
+  const exportFeedbackCSV = () => {
+    const data = fbFiltered.map((f) => ({
+      feedbackId: f.feedbackId,
+      createdAt: formatDate(f.createdAt),
+      userId: f.userId ?? "",
+      userName: f.userName ?? "",
+      subject: f.subject ?? "",
+      message: f.message ?? "",
+      page: f.page ?? "",
+      userAgent: f.userAgent ?? "",
+      isRead: f.isRead ? "Yes" : "No",
+    }));
+    const blob = new Blob([toCSV(data)], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `feedback_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // feedback client-side filtering
+  const fbFiltered = useMemo(() => {
+    let list = [...feedbacks];
+    // keyword
+    const q = fbQ.trim().toLowerCase();
+    if (q) {
+      list = list.filter((f) =>
+        [f.subject, f.message, f.userName, f.page]
+          .map((x) => (x || "").toString().toLowerCase())
+          .some((s) => s.includes(q))
+      );
+    }
+    // date
+    const from = fbFrom ? new Date(fbFrom + "T00:00:00") : null;
+    const to = fbTo ? new Date(fbTo + "T23:59:59") : null;
+    if (from || to) {
+      list = list.filter((f) => {
+        const d = new Date(f.createdAt);
+        if (from && d < from) return false;
+        if (to && d > to) return false;
+        return true;
+      });
+    }
+    // sort newest first
+    list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    return list;
+  }, [feedbacks, fbQ, fbFrom, fbTo]);
+
+  const fbTotalPages = Math.max(1, Math.ceil(fbFiltered.length / FB_PAGE_SIZE));
+  const fbPageSlice = fbFiltered.slice(
+    (fbPage - 1) * FB_PAGE_SIZE,
+    fbPage * FB_PAGE_SIZE
+  );
+
+  /* ---------- render ---------- */
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center text-slate-600 dark:text-slate-300">
@@ -492,6 +688,9 @@ const AdminDashboard = () => {
       </div>
     );
   }
+
+  // ---------- NEW: simple bar scale ----------
+  const maxRequests = Math.max(1, ...skillsReport.map((r) => r.totalRequests || 0));
 
   return (
     <div className="relative min-h-screen font-sans">
@@ -505,17 +704,19 @@ const AdminDashboard = () => {
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 shadow" />
             <div className="text-slate-800 dark:text-slate-200 font-semibold">SkillLink</div>
           </div>
-          <div className="flex gap-12 items-center text-xs text-slate-500 dark:text-slate-400">
-            <p>Admin Dashboard</p>
+          <div className="flex gap-4 items-center text-xs text-slate-500 dark:text-slate-400">
             <MacButton
-              onClick={() => {
-                const el = document.documentElement;
-                el.classList.toggle("dark");
-                localStorage.theme = el.classList.contains("dark") ? "dark" : "light";
-              }}
+              onClick={onFeedbackOpen}
+              className="relative !px-3 !py-2"
+              title="View feedback"
             >
-              <i className="fas fa-moon"></i>
+              <i className="fas fa-message" /> Feedback
+              {feedbackHasUnread && (
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-600 rounded-full" />
+              )}
             </MacButton>
+            <p className="hidden sm:block ml-4">Admin Dashboard</p>
+            <SettingsMenu />
           </div>
         </div>
       </GlassBar>
@@ -602,7 +803,7 @@ const AdminDashboard = () => {
             </div>
 
             <div className="flex items-center gap-2 relative" ref={bulkRef}>
-              <MacButton onClick={exportCSV}>Export CSV</MacButton>
+              <MacButton onClick={exportUsersCSV}>Export CSV</MacButton>
               <MacButton
                 onClick={() => setBulkOpen((v) => !v)}
                 disabled={selectedIds.length === 0}
@@ -821,12 +1022,110 @@ const AdminDashboard = () => {
           </table>
         </GlassCard>
 
+        {/* ---------- NEW: Top Requested Skills report ---------- */}
+        <GlassCard className="p-6">
+          <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+            <div className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+              Top Requested Skills
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-slate-600 dark:text-slate-400">Range</label>
+              <select
+                value={rangeDays}
+                onChange={(e) => setRangeDays(Number(e.target.value))}
+                className="border border-slate-300 dark:border-slate-700 bg-white dark:bg-ink-800 text-slate-800 dark:text-slate-200 rounded px-2 py-1"
+              >
+                <option value={30}>Last 30 days</option>
+                <option value={90}>Last 90 days</option>
+                <option value={365}>Last 365 days</option>
+                <option value={0}>All time</option>
+              </select>
+
+              <label className="text-xs text-slate-600 dark:text-slate-400 ml-2">Limit</label>
+              <select
+                value={reportLimit}
+                onChange={(e) => setReportLimit(Number(e.target.value))}
+                className="border border-slate-300 dark:border-slate-700 bg-white dark:bg-ink-800 text-slate-800 dark:text-slate-200 rounded px-2 py-1"
+              >
+                {[5,10,15,20,25].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+
+              <MacButton onClick={loadSkillsReport}>Refresh</MacButton>
+              <MacButton onClick={exportSkillReportCSV}>Export CSV</MacButton>
+            </div>
+          </div>
+
+          {loadingReport ? (
+            <div className="text-slate-600 dark:text-slate-300">Loading report…</div>
+          ) : skillsReport.length === 0 ? (
+            <div className="text-slate-600 dark:text-slate-300">No data for the selected range.</div>
+          ) : (
+            <div className="space-y-4">
+              {skillsReport.map((row) => {
+                const pct = Math.round(((row.totalRequests || 0) / maxRequests) * 100);
+                const completionRate = row.totalRequests ? (row.completed / row.totalRequests) * 100 : 0;
+                return (
+                  <div key={row.skillName}>
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="font-medium text-slate-800 dark:text-slate-200">
+                        {row.skillName}
+                      </div>
+                      <div className="text-xs text-slate-500 dark:text-slate-400">
+                        {row.totalRequests} requests • {row.completed} completed ({completionRate.toFixed(1)}%)
+                      </div>
+                    </div>
+                    <div className="w-full h-3 rounded-full bg-slate-200 dark:bg-ink-800 overflow-hidden">
+                      <div
+                        className="h-3 bg-blue-600 dark:bg-blue-500"
+                        style={{ width: `${pct}%` }}
+                        title={`${pct}% of max (${maxRequests})`}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* detail table */}
+              <div className="overflow-x-auto mt-4">
+                <table className="min-w-full text-sm dark:text-white/80">
+                  <thead>
+                    <tr className="text-left bg-white/60 dark:bg-ink-800/60">
+                      <th className="px-3 py-2">Skill</th>
+                      <th className="px-3 py-2">Requests</th>
+                      <th className="px-3 py-2">Scheduled</th>
+                      <th className="px-3 py-2">Completed</th>
+                      <th className="px-3 py-2">Completion %</th>
+                      <th className="px-3 py-2">First</th>
+                      <th className="px-3 py-2">Latest</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {skillsReport.map((r) => (
+                      <tr key={`row-${r.skillName}`} className="border-t border-white/40 dark:border-white/10">
+                        <td className="px-3 py-2">{r.skillName}</td>
+                        <td className="px-3 py-2">{r.totalRequests}</td>
+                        <td className="px-3 py-2">{r.scheduled}</td>
+                        <td className="px-3 py-2">{r.completed}</td>
+                        <td className="px-3 py-2">
+                          {r.totalRequests ? ((r.completed / r.totalRequests) * 100).toFixed(1) : "0.0"}%
+                        </td>
+                        <td className="px-3 py-2">{formatDate(r.firstRequestAt)}</td>
+                        <td className="px-3 py-2">{formatDate(r.lastRequestAt)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </GlassCard>
+
         {/* Pagination */}
         <div className="flex items-center justify-between">
-          <div className="text-sm text-slate-600 dark:text-slate-400">
+          <div className="text-sm text-slate-600 dark:text-slate-400  mb-10">
             Page {page} of {totalPages}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 mb-10">
             <MacButton disabled={page === 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
               Prev
             </MacButton>
@@ -950,6 +1249,162 @@ const AdminDashboard = () => {
               >
                 {deletingId ? "Deleting…" : "Delete Permanently"}
               </button>
+            </GlassCard>
+          </div>
+        </div>
+      )}
+
+      {/* ========== NEW: Feedback Modal ========== */}
+      {feedbackOpen && (
+        <div className="fixed inset-0 z-[85] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setFeedbackOpen(false)} />
+          <div className="relative w-full max-w-3xl mx-4">
+            <GlassCard className="overflow-hidden">
+              {/* header */}
+              <div className="px-5 py-4 border-b border-black/10 dark:border-white/10 flex items-center justify-between">
+                <div className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+                  User Feedback
+                </div>
+                <button
+                  className="text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+                  onClick={() => setFeedbackOpen(false)}
+                  aria-label="Close"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* filters */}
+              <div className="px-5 py-3 flex flex-wrap items-center gap-2">
+                <select
+                  value={fbFilter}
+                  onChange={(e) => {
+                    setFbFilter(e.target.value);
+                    setFbPage(1);
+                    loadFeedbacks();
+                  }}
+                  className="rounded-xl border px-2 py-1 border-slate-300 dark:border-slate-700 bg-white dark:bg-ink-800 text-slate-800 dark:text-slate-200"
+                >
+                  <option value="ALL">All</option>
+                  <option value="UNREAD">Unread</option>
+                  <option value="READ">Read</option>
+                </select>
+
+                <input
+                  placeholder="Search subject/message/user…"
+                  value={fbQ}
+                  onChange={(e) => {
+                    setFbQ(e.target.value);
+                    setFbPage(1);
+                  }}
+                  className="rounded-xl border px-3 py-1 w-64 border-slate-300 dark:border-slate-700 bg-white dark:bg-ink-800 text-slate-800 dark:text-slate-200"
+                />
+
+                <input
+                  type="date"
+                  value={fbFrom}
+                  onChange={(e) => {
+                    setFbFrom(e.target.value);
+                    setFbPage(1);
+                  }}
+                  className="rounded-xl border px-2 py-1 border-slate-300 dark:border-slate-700 bg-white dark:bg-ink-800 text-slate-800 dark:text-slate-200"
+                />
+                <span className="text-slate-500 text-xs">to</span>
+                <input
+                  type="date"
+                  value={fbTo}
+                  onChange={(e) => {
+                    setFbTo(e.target.value);
+                    setFbPage(1);
+                  }}
+                  className="rounded-xl border px-2 py-1 border-slate-300 dark:border-slate-700 bg-white dark:bg-ink-800 text-slate-800 dark:text-slate-200"
+                />
+
+                <MacButton onClick={loadFeedbacks} className="ml-auto">
+                  Refresh
+                </MacButton>
+                <MacButton onClick={markAllVisibleRead}>Mark visible read</MacButton>
+                <MacButton onClick={exportFeedbackCSV}>Export CSV</MacButton>
+              </div>
+
+              {/* body */}
+              <div className="px-5 pb-4 max-h-[65vh] overflow-auto">
+                {feedbackLoading ? (
+                  <div className="py-8 text-center text-slate-600 dark:text-slate-300">
+                    Loading…
+                  </div>
+                ) : feedbackErr ? (
+                  <div className="py-8 text-center text-red-600">{feedbackErr}</div>
+                ) : fbFiltered.length === 0 ? (
+                  <div className="py-10 text-center text-slate-600 dark:text-slate-300">
+                    No feedback matches your filters.
+                  </div>
+                ) : (
+                  <ul className="space-y-3">
+                    {fbPageSlice.map((f) => (
+                      <li
+                        key={f.feedbackId}
+                        className={`rounded-xl border px-4 py-3 ${
+                          f.isRead
+                            ? "border-white/40 dark:border-white/10 bg-white/70 dark:bg-ink-900/40"
+                            : "border-blue-300/60 dark:border-blue-400/30 bg-blue-50/70 dark:bg-blue-950/30"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-slate-500">
+                                #{f.feedbackId}
+                              </span>
+                              {!f.isRead && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-600 text-white">
+                                  new
+                                </span>
+                              )}
+                              <span className="ml-2 text-xs text-slate-500">
+                                {formatDate(f.createdAt)}
+                              </span>
+                            </div>
+                            <div className="mt-0.5 font-medium text-slate-900 dark:text-slate-100">
+                              {f.subject || "General feedback"}
+                            </div>
+                            <div className="text-sm text-slate-700 dark:text-slate-200 whitespace-pre-line">
+                              {f.message}
+                            </div>
+                            <div className="mt-2 text-xs text-slate-500 dark:text-slate-400 flex flex-wrap gap-x-4 gap-y-1">
+                              {f.userName && <span>From: {f.userName}{f.userId ? ` (ID: ${f.userId})` : ""}</span>}
+                              {f.page && <span>Page: {f.page}</span>}
+                              {f.userAgent && <span>UA: {f.userAgent}</span>}
+                            </div>
+                          </div>
+                          <div className="shrink-0 flex flex-col items-end gap-2">
+                            <MacButton onClick={() => markFeedbackRead(f.feedbackId, !f.isRead)}>
+                              {f.isRead ? "Mark Unread" : "Mark Read"}
+                            </MacButton>
+                          </div>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              {/* pagination */}
+              {fbFiltered.length > 0 && (
+                <div className="px-5 py-3 border-t border-black/10 dark:border-white/10 flex justify-between items-center">
+                  <div className="text-xs text-slate-600 dark:text-slate-400">
+                    Page {fbPage} of {fbTotalPages} • {fbFiltered.length} item{fbFiltered.length !== 1 ? "s" : ""}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <MacButton disabled={fbPage === 1} onClick={() => setFbPage((p) => Math.max(1, p - 1))}>
+                      Prev
+                    </MacButton>
+                    <MacButton disabled={fbPage === fbTotalPages} onClick={() => setFbPage((p) => Math.min(fbTotalPages, p + 1))}>
+                      Next
+                    </MacButton>
+                  </div>
+                </div>
+              )}
             </GlassCard>
           </div>
         </div>

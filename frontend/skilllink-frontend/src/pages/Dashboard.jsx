@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toImageUrl } from "../utils/image";
-import { ensureThemeFromStorage, toggleTheme } from "../utils/theme";
+import { ensureThemeFromStorage } from "../utils/theme";
 import Dock from "../components/Dock";
-import { authApi, requestsApi } from "../api";
+import { authApi, requestsApi, ratingsApi } from "../api";
+import SettingsMenu from "../components/SettingsMenu";
 
 /* -------------------- small UI atoms -------------------- */
 const GlassCard = ({ className = "", children }) => (
@@ -92,6 +93,10 @@ function Dashboard() {
   const [err, setErr] = useState("");
   const [reqErr, setReqErr] = useState("");
 
+  const [feedbacks, setFeedbacks] = useState([]);
+  const [fbLoading, setFbLoading] = useState(true);
+  const [fbErr, setFbErr] = useState("");
+
   useEffect(() => {
     ensureThemeFromStorage?.();
   }, []);
@@ -100,10 +105,7 @@ function Dashboard() {
     const init = async () => {
       try {
         setLoading(true);
-        const [meRes, profileRes] = await Promise.all([
-          authApi.me(),
-          authApi.getProfile(),
-        ]);
+        const [meRes, profileRes] = await Promise.all([authApi.me(), authApi.getProfile()]);
         setMe(meRes.data);
         setProfile(profileRes.data);
       } catch {
@@ -114,6 +116,11 @@ function Dashboard() {
     };
     init();
   }, []);
+
+  // ---- role flags (declare BEFORE effects that depend on them)
+  const role = useMemo(() => (me?.role || "").toString().toUpperCase(), [me]);
+  const isAdmin = role === "ADMIN";
+  const isTutor = role === "TUTOR" || (profile?.readyToTeach ?? false);
 
   useEffect(() => {
     const loadReqs = async () => {
@@ -131,6 +138,35 @@ function Dashboard() {
     };
     loadReqs();
   }, []);
+
+  useEffect(() => {
+    const loadFeedbacks = async () => {
+      try {
+        setFbLoading(true);
+        setFbErr("");
+        const limit = 5;
+        const res = isTutor
+          ? await ratingsApi.listReceived({ limit })
+          : await ratingsApi.listGiven({ limit });
+        setFeedbacks(res.data || []);
+      } catch (e) {
+        console.error(e);
+        setFbErr("Failed to load session feedback");
+      } finally {
+        setFbLoading(false);
+      }
+    };
+    if (me && profile) loadFeedbacks();
+  }, [me, profile, isTutor]);
+
+  const Stars = ({ value = 0 }) => (
+    <span aria-label={`${value} star rating`}>
+      {"★★★★★".slice(0, value)}
+      <span className="text-slate-300 dark:text-slate-600">
+        {"★★★★★".slice(value)}
+      </span>
+    </span>
+  );
 
   const stats = useMemo(() => {
     const total = requests.length;
@@ -162,13 +198,9 @@ function Dashboard() {
   const avatarUrl = toImageUrl(profile?.profilePicture);
   const firstLetter = profile?.fullName?.[0]?.toUpperCase() || "U";
 
-  const role = (me?.role || "").toString().toUpperCase();
-  const isAdmin = role === "ADMIN";
-  const isTutor = role === "TUTOR" || profile?.readyToTeach;
-
   return (
     <div className="relative min-h-screen font-sans">
-      {/* Background gradient layers */}
+      {/* Background */}
       <div className="absolute inset-0 -z-10 bg-gradient-to-b from-slate-50 via-white to-slate-100 dark:from-ink-900 dark:via-ink-900 dark:to-ink-800" />
 
       {/* Top bar */}
@@ -181,21 +213,12 @@ function Dashboard() {
           <div className=" flex gap-12 items-center text-xs text-slate-500 dark:text-slate-400">
             <div className="flex gap-3">
               {isAdmin ? (
-                <MacPrimary onClick={() => navigate("/admin-dashboard")}>
-                  Admin Panel
-                </MacPrimary>
+                <MacPrimary onClick={() => navigate("/admin-dashboard")}>Admin Panel</MacPrimary>
               ) : (
                 <p>Dashboard</p>
               )}
             </div>
-            <button
-              data-testid="theme-toggle"
-              onClick={toggleTheme}
-              className="px-3 py-1.5 rounded-full glass text-sm"
-              aria-label="Toggle theme"
-            >
-              <i className="fas fa-moon"></i>
-            </button>
+            <SettingsMenu />
           </div>
         </div>
       </GlassBar>
@@ -300,6 +323,54 @@ function Dashboard() {
                         Join
                       </MacPrimary>
                     )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </GlassCard>
+
+        {/* Session Feedback */}
+        <GlassCard className="mt-6">
+          <div className="px-6 py-4 border-b border-black/10 dark:border-white/10 flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+              {isTutor ? "Latest Feedback from Learners" : "Your Recent Session Feedback"}
+            </h2>
+            <span className="text-xs text-slate-500 dark:text-slate-400">
+              {isTutor ? "What learners said about you" : "What you shared after sessions"}
+            </span>
+          </div>
+
+          {fbLoading ? (
+            <div className="p-6 text-slate-500 dark:text-slate-400">Loading…</div>
+          ) : fbErr ? (
+            <div className="p-6 text-red-600">{fbErr}</div>
+          ) : feedbacks.length === 0 ? (
+            <div className="p-6 text-slate-500 dark:text-slate-400">
+              {isTutor ? "No feedback yet." : "You haven't left feedback yet."}
+            </div>
+          ) : (
+            <ul className="divide-y divide-black/10 dark:divide-white/10">
+              {feedbacks.map((f) => (
+                <li key={f.ratingId || f.acceptedRequestId} className="px-6 py-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <Stars value={Math.max(0, Math.min(5, Number(f.rating) || 0))} />
+                      <div className="text-sm text-slate-500 dark:text-slate-400">
+                        {new Date(f.createdAt).toLocaleString()}
+                      </div>
+                    </div>
+                    {f.skillName && (
+                      <Chip className="bg-slate-200/60 dark:bg-slate-700/40">{f.skillName}</Chip>
+                    )}
+                  </div>
+                  {f.comment && (
+                    <p className="mt-2 text-slate-700 dark:text-slate-200">{f.comment}</p>
+                  )}
+                  <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                    {isTutor
+                      ? `From: ${f.fromUserName || "Learner"}`
+                      : `To: ${f.toUserName || "Tutor"}`}
                   </div>
                 </li>
               ))}
