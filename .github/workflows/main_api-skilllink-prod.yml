@@ -12,7 +12,7 @@ permissions:
 env:
   WEBAPP_NAME: api-skilllink-prod
   PROJECT_PATH: SkillLink.API/SkillLink.API.csproj
-  DOTNET_VERSION: '8.0.x'
+  DOTNET_VERSION: '9.0.x'
 
 jobs:
   build:
@@ -60,3 +60,4 @@ jobs:
           app-name: ${{ env.WEBAPP_NAME }}
           package: ./drop
           # slot-name: production   # optional; production is default
+
