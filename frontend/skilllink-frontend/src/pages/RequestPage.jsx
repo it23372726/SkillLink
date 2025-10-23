@@ -234,7 +234,7 @@ const RequestsPane = () => {
   const [note, setNote] = useState("");
   const [ratingBusy, setRatingBusy] = useState(false);
   const [alreadyRatedCache, setAlreadyRatedCache] = useState(new Set());
-  const [skipSet, setSkipSet] = useState(loadSkipSet());
+  const [, setSkipSet] = useState(loadSkipSet());
 
   /* ---------- tutorId derivation (fix for 400 on ratings) ---------- */
   const getTutorIdFromAccepted = useCallback(
