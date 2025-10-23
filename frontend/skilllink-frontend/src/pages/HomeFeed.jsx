@@ -6,6 +6,11 @@ import { MacButton, MacPrimary, GlassBar, GlassCard, Chip } from "../components/
 import FriendsDrawer from "../components/friends/FriendsDrawer";
 import { authApi, feedApi, requestsApi, tutorPostsApi } from "../api";
 import { toImageUrl } from "../utils/image";
+import {Bell, NotifDropdown} from "../components/notifications/BellMenu"
+import SettingsMenu from "../components/SettingsMenu";
+
+
+ 
 
 const statusStyles = {
   PENDING: "bg-yellow-200/70 text-yellow-900 dark:bg-yellow-400/20 dark:text-yellow-200",
@@ -239,7 +244,7 @@ const PostCard = ({ item, onLike, onDislike, onRemoveReaction, onAccept }) => {
   );
 };
 
-// --- FIX: Moved constants and helpers outside the component ---
+// --- helpers & constants (outside component) ---
 const debounce = (fn, ms = 450) => {
   let t;
   return (...args) => {
@@ -282,6 +287,64 @@ const HomeFeed = () => {
   const debouncedSetLiveQ = useMemo(() => debounce((q) => setLiveQ(q.trim()), 450), []);
   useEffect(() => { debouncedSetLiveQ(query); }, [query, debouncedSetLiveQ]);
 
+   // ---------------- Notifications ----------------
+   const bellRef = useRef(null);
+   const [notifOpen, setNotifOpen] = useState(false);
+   const [notifs, setNotifs] = useState([]);
+   const [loadingNotifs, setLoadingNotifs] = useState(true);
+ 
+   const unreadCount = useMemo(
+     () => notifs.filter((n) => !n.isRead).length,
+     [notifs]
+   );
+ 
+   const loadNotifs = useCallback(async () => {
+     try {
+       setLoadingNotifs(true);
+       const res = await authApi?.notifications?.list?.() // if you don't have this path, import notificationsApi like in Profile
+         ?? await (await import("../api")).notificationsApi.list();
+       setNotifs(res.data || []);
+     } catch {
+       setNotifs([]);
+     } finally {
+       setLoadingNotifs(false);
+     }
+   }, []);
+ 
+   const markAllRead = useCallback(async () => {
+     try {
+       const { notificationsApi } = await import("../api");
+       await notificationsApi.markAllRead();
+       setNotifs((prev) => prev.map((n) => ({ ...n, isRead: true })));
+     } catch {}
+   }, []);
+ 
+   const clearAllNotifs = useCallback(async () => {
+     try {
+       const { notificationsApi } = await import("../api");
+       if (typeof notificationsApi.clearAll === "function") {
+         await notificationsApi.clearAll();
+       } else if (typeof notificationsApi.deleteAll === "function") {
+         await notificationsApi.deleteAll();
+       }
+       setNotifs([]);
+     } catch {}
+   }, []);
+ 
+   const markNotifRead = useCallback(async (id) => {
+     try {
+       const { notificationsApi } = await import("../api");
+       await notificationsApi.markRead(id);
+       setNotifs((prev) =>
+         prev.map((n) => (n.notificationId === id ? { ...n, isRead: true } : n))
+       );
+     } catch {}
+   }, []);
+ 
+   useEffect(() => { loadNotifs(); }, [loadNotifs]);
+ 
+ 
+
   useEffect(() => {
     let ignore = false;
     const ensureUser = async () => {
@@ -298,52 +361,71 @@ const HomeFeed = () => {
     return () => { ignore = true; };
   }, [authUser?.userId]);
 
-  // Function to load posts (LESSON)
-  const loadPosts = useCallback(async (p = 1, qStr = "") => {
-    // 1. Check the REF, not the state, to prevent the dependency cycle
-    if (isLoading.current || (p > 1 && postsDone)) return;
+  // inside HomeFeed.jsx
+const loadPosts = useCallback(async (p = 1, qStr = "") => {
+  if (isLoading.current || (p > 1 && postsDone)) return;
+  isLoading.current = true;
+  setBusy(true);
+  try {
+    const res = await feedApi.list({
+      page: p,
+      pageSize: PAGE_SIZE,
+      q: qStr,
+      postType: "LESSON",
+      statusNot: "COMPLETED"
+    });
 
-    // 2. Set both the ref and the state
-    isLoading.current = true;
-    setBusy(true);
+    const raw = res.data || [];
+    const filtered = raw.filter(
+      (it) => it.postType === "LESSON" && norm(it.status) !== "COMPLETED"
+    );
 
-    try {
-      const res = await feedApi.list({ page: p, pageSize: PAGE_SIZE, q: qStr, postType: "LESSON", statusNot: "COMPLETED" });
-      const raw = res.data || [];
-      const filtered = raw.filter((it) => it.postType === "LESSON" && norm(it.status) !== "COMPLETED");
-
-      const serverAccepted = new Map(filtered.map((it) => [keyOf(it), acceptedStatusSet.has(norm(it.status))]));
-      const lessonIds = filtered.map((it) => it.postId);
-      let acceptedMap = new Map();
-      if (lessonIds.length) {
-        const { data } = await tutorPostsApi.acceptedStatusMany(lessonIds);
-        acceptedMap = new Map(Object.entries(data || {}).map(([k, v]) => [Number(k), !!v]));
+    // 🔹 NEW: ask backend to sort lessons similar to my requests
+    let sorted = filtered;
+    if (filtered.length > 0) {
+      try {
+        const sortResponse = await feedApi.sort(filtered);
+        sorted = sortResponse.data || filtered;
+      } catch (error) {
+        console.error("Could not sort lessons, displaying unsorted:", error);
+        sorted = filtered;
       }
-
-      const merged = filtered.map((it) => ({
-        ...it,
-        accepted: Boolean(serverAccepted.get(keyOf(it)) || acceptedMap.get(it.postId)),
-      }));
-
-      if (raw.length < PAGE_SIZE) setPostsDone(true);
-      setPosts((prev) => (p === 1 ? merged : [...prev, ...merged]));
-      setPostsPage(p);
-    } finally {
-      // 3. Set both back to false
-      isLoading.current = false;
-      setBusy(false);
-      setPostsInitialLoaded(true);
     }
-  }, [postsDone]); // <-- The dependency array is now correct and stable!
 
+    // Build accepted map AFTER sorting so we keep correct order
+    const lessonIds = sorted.map((it) => it.postId);
+
+    // Server-side statuses that mean "accepted"
+    const serverAccepted = new Map(
+      sorted.map((it) => [keyOf(it), acceptedStatusSet.has(norm(it.status))])
+    );
+
+    let acceptedMap = new Map();
+    if (lessonIds.length) {
+      const { data } = await tutorPostsApi.acceptedStatusMany(lessonIds);
+      acceptedMap = new Map(Object.entries(data || {}).map(([k, v]) => [Number(k), !!v]));
+    }
+
+    const merged = sorted.map((it) => ({
+      ...it,
+      accepted: Boolean(serverAccepted.get(keyOf(it)) || acceptedMap.get(it.postId)),
+    }));
+
+    if (raw.length < PAGE_SIZE) setPostsDone(true);
+    setPosts((prev) => (p === 1 ? merged : [...prev, ...merged]));
+    setPostsPage(p);
+  } finally {
+    isLoading.current = false;
+    setBusy(false);
+    setPostsInitialLoaded(true);
+  }
+}, [postsDone]);
+
+  // load requests
   const loadRequests = useCallback(async (p = 1, qStr = "") => {
-    // 1. Check the REF, not the state
     if (isLoading.current || (p > 1 && requestsDone)) return;
-
-    // 2. Set both the ref and the state
     isLoading.current = true;
     setBusy(true);
-    
     try {
       const res = await feedApi.list({ page: p, pageSize: PAGE_SIZE, q: qStr, postType: "REQUEST", statusNot: "COMPLETED", isPrivate: false });
       const raw = res.data || [];
@@ -358,7 +440,7 @@ const HomeFeed = () => {
       if (filtered.length > 0) {
         try {
           const sortResponse = await feedApi.sort(filtered);
-          finalData = sortResponse.data || filtered; 
+          finalData = sortResponse.data || filtered;
         } catch (error) {
           console.error("Could not sort requests, displaying unsorted:", error);
           finalData = filtered;
@@ -369,28 +451,32 @@ const HomeFeed = () => {
         ...it,
         accepted: acceptedStatusSet.has(norm(it.status)),
       }));
-      
+
       if (raw.length < PAGE_SIZE) setRequestsDone(true);
       setRequests((prev) => (p === 1 ? merged : [...prev, ...merged]));
       setRequestsPage(p);
-
     } finally {
-      // 3. Set both back to false
       isLoading.current = false;
       setBusy(false);
       setRequestsInitialLoaded(true);
     }
-  }, [requestsDone]); // <-- The dependency array is now correct and stable!
-  
-  // Initial load and tab switching
+  }, [requestsDone]);
+
+  /* ---------- stable refs to silence ESLint & avoid loops ---------- */
+  const loadPostsRef = useRef(loadPosts);
+  const loadRequestsRef = useRef(loadRequests);
+  useEffect(() => { loadPostsRef.current = loadPosts; }, [loadPosts]);
+  useEffect(() => { loadRequestsRef.current = loadRequests; }, [loadRequests]);
+
+  // Initial load and tab switching (use refs here)
   useEffect(() => {
     if (feedTab === "POSTS" && !postsInitialLoaded) {
-      loadPosts(1, liveQ);
+      loadPostsRef.current?.(1, liveQ);
     } else if (feedTab === "REQUESTS" && !requestsInitialLoaded) {
-      loadRequests(1, liveQ);
+      loadRequestsRef.current?.(1, liveQ);
     }
-  }, [feedTab, postsInitialLoaded, requestsInitialLoaded, liveQ, loadPosts, loadRequests]);
-  
+  }, [feedTab, postsInitialLoaded, requestsInitialLoaded, liveQ]);
+
   // Search refresh
   useEffect(() => {
     setPostsDone(false);
@@ -399,19 +485,19 @@ const HomeFeed = () => {
     setRequestsInitialLoaded(false);
 
     if (feedTab === "POSTS") {
-      loadPosts(1, liveQ);
+      loadPostsRef.current?.(1, liveQ);
     } else {
-      loadRequests(1, liveQ);
+      loadRequestsRef.current?.(1, liveQ);
     }
-  }, [liveQ, feedTab, loadPosts, loadRequests]);
+  }, [liveQ, feedTab]);
 
   const refreshCurrentTab = () => {
     if (feedTab === "POSTS") {
       setPostsDone(false);
-      loadPosts(1, liveQ);
+      loadPostsRef.current?.(1, liveQ);
     } else {
       setRequestsDone(false);
-      loadRequests(1, liveQ);
+      loadRequestsRef.current?.(1, liveQ);
     }
   };
 
@@ -428,19 +514,19 @@ const HomeFeed = () => {
       alert(e?.response?.data?.message || "Failed to accept");
     }
   };
-  
+
   const isPostsTab = feedTab === "POSTS";
   const currentItems = isPostsTab ? posts : requests;
   const currentDone = isPostsTab ? postsDone : requestsDone;
   const currentInitialLoaded = isPostsTab ? postsInitialLoaded : requestsInitialLoaded;
   const searching = liveQ.length > 0;
-  
+
   const onLoadMore = () => {
     if (busy || currentDone) return;
     if (isPostsTab) {
-      loadPosts(postsPage + 1, liveQ);
+      loadPostsRef.current?.(postsPage + 1, liveQ);
     } else {
-      loadRequests(requestsPage + 1, liveQ);
+      loadRequestsRef.current?.(requestsPage + 1, liveQ);
     }
   };
 
@@ -454,15 +540,53 @@ const HomeFeed = () => {
             <div className="font-semibold text-slate-700 dark:text-slate-200">SkillLink</div>
           </div>
           <div className="relative flex flex-1 items-center justify-start">
-            <input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={`Search ${isPostsTab ? "Posts" : "Requests"}`} className="w-full max-w-xs pl-10 pr-8 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/60 text-slate-700 dark:text-slate-200 focus:ring-2 focus:ring-blue-500/40 outline-none" />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={`Search ${isPostsTab ? "Posts" : "Requests"}`}
+              className="w-full max-w-xs pl-10 pr-8 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/60 text-slate-700 dark:text-slate-200 focus:ring-2 focus:ring-blue-500/40 outline-none"
+            />
             <span className="absolute left-3 top-2.5 text-slate-400"><i className="fas fa-search" /></span>
-            {query && (<button onClick={() => setQuery("")} className="absolute right-2 top-2 inline-flex items-center justify-center w-6 h-6 rounded hover:bg-black/5 dark:hover:bg-white/10 text-slate-500" title="Clear" aria-label="Clear search">✕</button>)}
+            {query && (
+              <button
+                onClick={() => setQuery("")}
+                className="absolute right-2 top-2 inline-flex items-center justify-center w-6 h-6 rounded hover:bg-black/5 dark:hover:bg-white/10 text-slate-500"
+                title="Clear"
+                aria-label="Clear search"
+              >
+                ✕
+              </button>
+            )}
           </div>
-          <div>
-            <button onClick={() => navigate("/notifications")} className="focus:outline-none" title="Notifications" aria-label="Notifications">
-              <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-800 dark:text-white flex items-center justify-center font-semibold"><i className="fas fa-bell"></i></div>
-            </button>
+          <SettingsMenu/>
+          {/* Notifications bell */}
+          <div className="relative" ref={bellRef}>
+            <Bell
+              count={unreadCount}
+              onClick={() => {
+                const next = !notifOpen;
+                setNotifOpen(next);
+                if (next) loadNotifs();
+              }}
+            />
+            <NotifDropdown
+              open={notifOpen}
+              anchorRef={bellRef}
+              items={notifs}
+              loading={loadingNotifs}
+              onRefresh={loadNotifs}
+              onMarkAll={markAllRead}
+              onClearAll={clearAllNotifs}
+              onMarkRead={(n) => markNotifRead(n.notificationId)}
+              onView={(n) => {
+                if (!n.isRead) markNotifRead(n.notificationId);
+                if (n.link) navigate(n.link);
+                setNotifOpen(false);
+              }}
+            />
           </div>
+
           <div className="flex items-center gap-2 shrink-0">
             <button onClick={() => navigate("/profile")} className="focus:outline-none" title="My Profile" aria-label="My Profile">
               {loadingMe ? (
@@ -481,7 +605,11 @@ const HomeFeed = () => {
         <div className="mx-auto px-4 max-w-2xl sm:px-0 py-6 space-y-4 lg:mr-[22rem]">
           <div className="inline-flex bg-white/60 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl p-1 sticky top-[4.25rem] z-30">
             {["POSTS", "REQUESTS"].map((t) => (
-              <button key={t} onClick={() => setFeedTab(t)} className={`px-4 py-1.5 text-sm font-medium rounded-lg transition ${feedTab === t ? "bg-blue-600 text-white shadow" : "text-slate-700 dark:text-slate-300 hover:bg-white/70 dark:hover:bg-slate-700/60"}`}>
+              <button
+                key={t}
+                onClick={() => setFeedTab(t)}
+                className={`px-4 py-1.5 text-sm font-medium rounded-lg transition ${feedTab === t ? "bg-blue-600 text-white shadow" : "text-slate-700 dark:text-slate-300 hover:bg-white/70 dark:hover:bg-slate-700/60"}`}
+              >
                 {t === "POSTS" ? "Posts" : "Requests"}
               </button>
             ))}
@@ -494,16 +622,27 @@ const HomeFeed = () => {
           )}
 
           {currentItems.length === 0 && currentInitialLoaded ? (
-            <div className="text-center text-slate-500 py-10">{busy ? (searching ? "Searching…" : "Loading…") : `No ${isPostsTab ? "posts" : "requests"} found`}</div>
+            <div className="text-center text-slate-500 py-10">
+              {busy ? (searching ? "Searching…" : "Loading…") : `No ${isPostsTab ? "posts" : "requests"} found`}
+            </div>
           ) : (
             currentItems.map((it) => (
-              <PostCard key={`${it.postType}-${it.postId}`} item={it} onLike={like} onDislike={dislike} onRemoveReaction={removeReaction} onAccept={onAccept} />
+              <PostCard
+                key={`${it.postType}-${it.postId}`}
+                item={it}
+                onLike={like}
+                onDislike={dislike}
+                onRemoveReaction={removeReaction}
+                onAccept={onAccept}
+              />
             ))
           )}
 
           {!currentDone && currentItems.length > 0 && (
             <div className="flex justify-center py-4 pb-20">
-              <MacPrimary disabled={busy} onClick={onLoadMore}>{busy ? "Loading…" : "Load more"}</MacPrimary>
+              <MacPrimary disabled={busy} onClick={onLoadMore}>
+                {busy ? "Loading…" : "Load more"}
+              </MacPrimary>
             </div>
           )}
         </div>

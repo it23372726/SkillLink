@@ -41,6 +41,13 @@ export const adminApi = {
     http.put(`/admin/users/${userId}/active`, { isActive }),
   setRole: (userId, role) => http.put(`/admin/users/${userId}/role`, { role }),
   deleteUser: (userId) => http.delete(`/auth/users/${userId}`),
+  topSkills:(params) =>
+    http.get("/admin/reports/skill-demand", { params }),
+  feedbackList: (params = {}) =>
+    http.get("/feedback", { params }), // { isRead: true|false|null, limit, offset }
+  feedbackMarkRead: (id, isRead = true) =>
+    http.put(`/feedback/${id}/read`, null, { params: { isRead } }),
+  
 };
 
 /* ----------------- Feed ----------------- */
@@ -129,3 +136,14 @@ export const notificationsApi = {
   markRead: (id) => http.post(`/notifications/${id}/read`),
   markAllRead: () => http.post(`/notifications/read-all`),
 };
+
+
+// Assuming you already have an axios instance named `http`
+/* ----------------- Feedback ----------------- */
+export const feedbackApi = {
+  submit(payload) {
+    // { subject, message, page, userAgent }
+    return http.post("/feedback", payload);
+  },
+};
+

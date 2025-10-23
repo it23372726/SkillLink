@@ -1,3 +1,4 @@
+// src/pages/UserProfile.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toImageUrl } from "../utils/image";
@@ -9,7 +10,9 @@ import {
   requestsApi,
   skillsApi,
   notificationsApi,
+  ratingsApi, // ← added
 } from "../api";
+import SettingsMenu from "../components/SettingsMenu";
 
 /* ========================== small atoms ========================== */
 const GlassCard = ({ className = "", children }) => (
@@ -25,6 +28,7 @@ const GlassCard = ({ className = "", children }) => (
     {children}
   </div>
 );
+
 const GlassBar = ({ className = "", children }) => (
   <div
     className={
@@ -38,6 +42,7 @@ const GlassBar = ({ className = "", children }) => (
     {children}
   </div>
 );
+
 const MacButton = ({ className = "", children, ...props }) => (
   <button
     {...props}
@@ -54,6 +59,7 @@ const MacButton = ({ className = "", children, ...props }) => (
     {children}
   </button>
 );
+
 const MacPrimary = (props) => (
   <button
     {...props}
@@ -65,6 +71,7 @@ const MacPrimary = (props) => (
     }
   />
 );
+
 const MacDanger = (props) => (
   <button
     {...props}
@@ -76,6 +83,7 @@ const MacDanger = (props) => (
     }
   />
 );
+
 const MacToggle = ({ checked, onClick, onChange, disabled }) => (
   <button
     type="button"
@@ -99,6 +107,7 @@ const MacToggle = ({ checked, onClick, onChange, disabled }) => (
     />
   </button>
 );
+
 const Chip = ({ children, className = "" }) => (
   <span
     className={
@@ -109,6 +118,7 @@ const Chip = ({ children, className = "" }) => (
     {children}
   </span>
 );
+
 const SectionCard = ({ title, className = "", action, children }) => (
   <GlassCard className={"p-6"}>
     <div className="flex items-center justify-between border-b border-black/10 dark:border-white/10 pb-4 mb-4">
@@ -147,6 +157,166 @@ const levelPill = (level) => {
   }
 };
 
+/* ========================== Notification Bell ========================== */
+const Bell = ({ count = 0, onClick, title = "Notifications" }) => (
+  <button
+    onClick={onClick}
+    className="relative w-10 h-10 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-800 dark:text-white flex items-center justify-center focus:outline-none hover:opacity-90"
+    aria-label={title}
+    title={title}
+  >
+    <i className="fas fa-bell"></i>
+    {count > 0 && (
+      <span className="absolute -top-1 -right-1 inline-flex items-center justify-center rounded-full min-w-[18px] h-[18px] px-1 text-[11px] font-semibold bg-red-600 text-white">
+        {count > 99 ? "99+" : count}
+      </span>
+    )}
+  </button>
+);
+
+const NotifDropdown = ({
+  open,
+  anchorRef,
+  items,
+  loading,
+  onRefresh,
+  onMarkAll,
+  onClearAll,
+  onMarkRead,
+  onView,
+}) => {
+  const dropRef = useRef(null);
+
+  // close on outside click / ESC
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e) => {
+      if (
+        dropRef.current &&
+        !dropRef.current.contains(e.target) &&
+        anchorRef.current &&
+        !anchorRef.current.contains(e.target)
+      ) {
+        // noop here; container controls open/close
+      }
+    };
+    const onEsc = (e) => {
+      if (e.key === "Escape") {
+        anchorRef.current?.click();
+      }
+    };
+    document.addEventListener("keydown", onEsc);
+    document.addEventListener("mousedown", onClick);
+    return () => {
+      document.removeEventListener("keydown", onEsc);
+      document.removeEventListener("mousedown", onClick);
+    };
+  }, [open, anchorRef]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      ref={dropRef}
+      className="absolute right-0 mt-2 w-[380px] max-w-[92vw] rounded-2xl border border-white/40 dark:border-white/10 bg-white/80 dark:bg-ink-900/80 backdrop-blur-xl shadow-xl z-50"
+    >
+      {/* header actions */}
+      <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-white/40 dark:border-white/10">
+        <div className="font-medium text-slate-800 dark:text-slate-100 text-sm">
+          Notifications
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            className="text-xs px-2 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 text-slate-600 dark:text-slate-300"
+            onClick={onRefresh}
+            title="Refresh"
+          >
+            <i className="fas fa-rotate"></i>
+          </button>
+          <button
+            className="text-xs px-2 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 text-slate-600 dark:text-slate-300"
+            onClick={onMarkAll}
+            title="Mark all read"
+          >
+            Mark all
+          </button>
+          <button
+            className="text-xs px-2 py-1 rounded-lg hover:bg-red-50/70 dark:hover:bg-red-400/10 text-red-600"
+            onClick={onClearAll}
+            title="Clear all"
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+
+      {/* list */}
+      <div className="max-h-[60vh] overflow-auto">
+        {loading ? (
+          <div className="p-4 text-sm text-slate-600 dark:text-slate-300">
+            Loading…
+          </div>
+        ) : items.length === 0 ? (
+          <div className="p-4 text-sm text-slate-600 dark:text-slate-300">
+            No notifications.
+          </div>
+        ) : (
+          <ul className="divide-y divide-white/40 dark:divide-white/10">
+            {items.map((n) => (
+              <li
+                key={n.notificationId}
+                className={`px-3 py-3 ${!n.isRead ? "bg-blue-50/40 dark:bg-blue-900/10" : ""}`}
+              >
+                <div className="flex items-start gap-3">
+                  <div className="mt-0.5 w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-800 dark:text-white flex items-center justify-center shrink-0">
+                    <i className="fas fa-bell"></i>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium text-slate-900 dark:text-slate-100 line-clamp-2">
+                      {n.title}
+                      {!n.isRead && (
+                        <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-blue-600 text-white align-middle">
+                          new
+                        </span>
+                      )}
+                    </div>
+                    {n.body && (
+                      <div className="text-sm text-slate-700 dark:text-slate-200 mt-0.5 line-clamp-3">
+                        {n.body}
+                      </div>
+                    )}
+                    <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                      {new Date(n.createdAt).toLocaleString()}
+                    </div>
+                    <div className="mt-2 flex items-center gap-2">
+                      {n.link && (
+                        <MacPrimary
+                          onClick={() => onView(n)}
+                          className="!px-3 !py-1 text-xs"
+                        >
+                          View
+                        </MacPrimary>
+                      )}
+                      {!n.isRead && (
+                        <MacButton
+                          onClick={() => onMarkRead(n)}
+                          className="!px-3 !py-1 text-xs"
+                        >
+                          Mark read
+                        </MacButton>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+};
+
 /* ========================== page ========================== */
 const UserProfile = () => {
   const navigate = useNavigate();
@@ -179,6 +349,11 @@ const UserProfile = () => {
   const [followingCount, setFollowingCount] = useState(0);
   const [loadingSocial, setLoadingSocial] = useState(true);
 
+  // ⭐ ratings
+  const [ratingAvg, setRatingAvg] = useState(null);
+  const [ratingCount, setRatingCount] = useState(0);
+  const [loadingRating, setLoadingRating] = useState(true);
+
   // schedule modal
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState(null);
@@ -202,7 +377,9 @@ const UserProfile = () => {
   const [photoFile, setPhotoFile] = useState(null);
   const [photoPreview, setPhotoPreview] = useState("");
 
-  // notifications
+  // notifications (dropdown)
+  const bellRef = useRef(null);
+  const [notifOpen, setNotifOpen] = useState(false);
   const [notifs, setNotifs] = useState([]);
   const [loadingNotifs, setLoadingNotifs] = useState(true);
 
@@ -223,32 +400,27 @@ const UserProfile = () => {
       setLoadingNotifs(false);
     }
   };
+
   const clearAllNotifs = async () => {
     try {
       if (typeof notificationsApi.clearAll === "function") {
         await notificationsApi.clearAll();
       } else if (typeof notificationsApi.deleteAll === "function") {
         await notificationsApi.deleteAll();
-      } else {
-        // Fallback: just clear locally
       }
       setNotifs([]);
     } catch (e) {
-      // optional: surface a message
       setMessage("Failed to clear notifications");
     }
   };
-  
 
   const markNotifRead = async (id) => {
     try {
       await notificationsApi.markRead(id);
       setNotifs((prev) =>
-        prev.map((n) =>
-          n.notificationId === id ? { ...n, isRead: true } : n
-        )
+        prev.map((n) => (n.notificationId === id ? { ...n, isRead: true } : n))
       );
-    } catch (e) {
+    } catch {
       // ignore
     }
   };
@@ -257,7 +429,7 @@ const UserProfile = () => {
     try {
       await notificationsApi.markAllRead();
       setNotifs((prev) => prev.map((n) => ({ ...n, isRead: true })));
-    } catch (e) {
+    } catch {
       // ignore
     }
   };
@@ -266,11 +438,27 @@ const UserProfile = () => {
     loadNotifs();
   }, []);
 
+  // open/close dropdown + outside click
+  useEffect(() => {
+    const onDocClick = (e) => {
+      if (!notifOpen) return;
+      if (
+        bellRef.current &&
+        !bellRef.current.contains(e.target) &&
+        !e.target.closest?.("#notif-dropdown")
+      ) {
+        setNotifOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [notifOpen]);
+
   /* ----------------------- photo helpers ----------------------- */
-  const prevent = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-  };
+  // const prevent = (e) => {
+  //   e.preventDefault();
+  //   e.stopPropagation();
+  // };
 
   const setProfileFile = (file) => {
     if (!file) return;
@@ -284,10 +472,10 @@ const UserProfile = () => {
     }
     setPhotoFile(file);
   };
-  const onPhotoChange = (e) => {
-    const f = e.target.files?.[0];
-    if (f) setProfileFile(f);
-  };
+  // const onPhotoChange = (e) => {
+  //   const f = e.target.files?.[0];
+  //   if (f) setProfileFile(f);
+  // };
   useEffect(() => {
     if (photoFile) {
       const url = URL.createObjectURL(photoFile);
@@ -335,6 +523,7 @@ const UserProfile = () => {
     if (profile?.userId) {
       loadSkills();
       loadSocialCounts();
+      loadRatingSummary(profile.userId); // ← added
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile?.userId]);
@@ -406,14 +595,29 @@ const UserProfile = () => {
       setFollowingCount((followingRes.data || []).length);
       setFollowersCount((followersRes.data || []).length);
     } catch (e) {
-      console.warn(
-        "Social count load failed:",
-        e?.response?.data || e?.message
-      );
+      console.warn("Social count load failed:", e?.response?.data || e?.message);
       setFollowingCount(0);
       setFollowersCount(0);
     } finally {
       setLoadingSocial(false);
+    }
+  };
+
+  const loadRatingSummary = async (tutorId) => {
+    try {
+      setLoadingRating(true);
+      const res = await ratingsApi.summaryForTutor(`${tutorId}`);
+      const d = res?.data ?? {};
+      const avg = d.average ?? d.avg ?? d.Average ?? null;
+      const cnt = d.count ?? d.total ?? d.ratingsCount ?? 0;
+      setRatingAvg(typeof avg === "number" ? avg : null);
+      setRatingCount(Number.isFinite(cnt) ? cnt : 0);
+    } catch (err) {
+      console.warn("Rating summary load failed:", err?.response?.data || err?.message);
+      setRatingAvg(null);
+      setRatingCount(0);
+    } finally {
+      setLoadingRating(false);
     }
   };
 
@@ -449,9 +653,7 @@ const UserProfile = () => {
       setToggling(true);
       await authApi.setTeachMode(!profile.readyToTeach);
       setProfile((p) => ({ ...p, readyToTeach: !profile.readyToTeach }));
-      setMessage(
-        !profile.readyToTeach ? "Tutor mode enabled" : "Tutor mode disabled"
-      );
+      setMessage(!profile.readyToTeach ? "Tutor mode enabled" : "Tutor mode disabled");
     } catch (err) {
       console.error("Tutor mode error:", err);
       setMessage("Failed to update Tutor mode");
@@ -475,10 +677,7 @@ const UserProfile = () => {
     if (!selectedRequest) return;
     try {
       setScheduling(true);
-      await requestsApi.scheduleAccepted(
-        `${selectedRequest.acceptedRequestId}`,
-        scheduleForm
-      );
+      await requestsApi.scheduleAccepted(`${selectedRequest.acceptedRequestId}`, scheduleForm);
       setMessage("Meeting scheduled successfully!");
       setModalOpen(false);
       loadTeaching();
@@ -526,20 +725,12 @@ const UserProfile = () => {
 
   const overviewStats = useMemo(() => {
     const totalTeach = acceptedRequests.length;
-    const scheduledTeach = acceptedRequests.filter(
-      (r) => r.status === "SCHEDULED"
-    ).length;
-    const completedTeach = acceptedRequests.filter(
-      (r) => r.status === "COMPLETED"
-    ).length;
+    const scheduledTeach = acceptedRequests.filter((r) => r.status === "SCHEDULED").length;
+    const completedTeach = acceptedRequests.filter((r) => r.status === "COMPLETED").length;
 
     const totalLearn = learningRequests.length;
-    const scheduledLearn = learningRequests.filter(
-      (r) => r.status === "SCHEDULED"
-    ).length;
-    const completedLearn = learningRequests.filter(
-      (r) => r.status === "COMPLETED"
-    ).length;
+    const scheduledLearn = learningRequests.filter((r) => r.status === "SCHEDULED").length;
+    const completedLearn = learningRequests.filter((r) => r.status === "COMPLETED").length;
 
     return {
       totalTeach,
@@ -552,6 +743,25 @@ const UserProfile = () => {
   }, [acceptedRequests, learningRequests]);
 
   const formatDate = (d) => new Date(d).toLocaleString();
+
+  // simple read-only star renderer
+  const Stars = ({ value = 0, size = "text-sm" }) => {
+    const v = Math.max(0, Math.min(5, Number(value) || 0));
+    const full = Math.floor(v);
+    const half = v - full >= 0.5 ? 1 : 0;
+    const empty = 5 - full - half;
+    return (
+      <span className={`inline-flex items-center gap-0.5 ${size}`} aria-label={`Rating ${v.toFixed(1)} out of 5`}>
+        {Array.from({ length: full }).map((_, i) => (
+          <i key={`f${i}`} className="fas fa-star text-yellow-500" />
+        ))}
+        {half === 1 && <i className="fas fa-star-half-alt text-yellow-500" />}
+        {Array.from({ length: empty }).map((_, i) => (
+          <i key={`e${i}`} className="far fa-star text-yellow-500" />
+        ))}
+      </span>
+    );
+  };
 
   /* ----------------------- renders ----------------------- */
   if (loadingProfile) {
@@ -602,8 +812,42 @@ const UserProfile = () => {
                 SkillLink
               </div>
             </div>
-            <div className="flex mr-24 items-center text-xs text-slate-500 dark:text-slate-400">
-              <p>Profile</p>
+
+
+            <div className="flex items-center gap-3">
+              {/* settings */}
+              <SettingsMenu/>
+              {/* Bell dropdown */}
+              <div className="relative" ref={bellRef} id="notif-dropdown">
+                <Bell
+                  count={unreadCount}
+                  onClick={() => {
+                    const next = !notifOpen;
+                    setNotifOpen(next);
+                    if (next) loadNotifs();
+                  }}
+                />
+                <NotifDropdown
+                  open={notifOpen}
+                  anchorRef={bellRef}
+                  items={notifs}
+                  loading={loadingNotifs}
+                  onRefresh={loadNotifs}
+                  onMarkAll={markAllRead}
+                  onClearAll={clearAllNotifs}
+                  onMarkRead={(n) => markNotifRead(n.notificationId)}
+                  onView={(n) => {
+                    if (!n.isRead) markNotifRead(n.notificationId);
+                    if (n.link) navigate(n.link);
+                    setNotifOpen(false);
+                  }}
+                />
+              </div>
+
+              {/* Page label (optional) */}
+              <div className="hidden sm:block text-xs text-slate-500 dark:text-slate-400 ml-2">
+                Profile
+              </div>
             </div>
           </div>
         </GlassBar>
@@ -617,11 +861,7 @@ const UserProfile = () => {
             <div className="flex items-center gap-5">
               <div className="w-24 h-24 rounded-2xl overflow-hidden relative border border-white/40 dark:border-white/10">
                 {avatar ? (
-                  <img
-                    src={avatar}
-                    alt={profile.fullName}
-                    className="w-full h-full object-cover"
-                  />
+                  <img src={avatar} alt={profile.fullName} className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center bg-slate-100 dark:bg-ink-800/60">
                     <span className="text-3xl font-semibold text-slate-500 dark:text-slate-300">
@@ -641,24 +881,32 @@ const UserProfile = () => {
                       Tutor
                     </Chip>
                   )}
-                  {unreadCount > 0 && (
-                    <Chip className="bg-blue-200/60 text-blue-900 dark:bg-blue-400/20 dark:text-blue-200">
-                      {unreadCount} new
-                    </Chip>
-                  )}
                 </div>
-                <p className="text-slate-600 dark:text-slate-300">
-                  {profile.email}
-                </p>
+                <p className="text-slate-600 dark:text-slate-300">{profile.email}</p>
                 {profile.location && (
                   <p className="text-slate-500 dark:text-slate-400 mt-1 text-sm">
                     <i className="fas fa-map-marker-alt"></i> {profile.location}
                   </p>
                 )}
+
+                {/* Rating summary (avg + count) */}
+                <div className="mt-2 flex items-center gap-2">
+                  {loadingRating ? (
+                    <span className="text-sm text-slate-500 dark:text-slate-400">Rating…</span>
+                  ) : ratingCount > 0 && ratingAvg != null ? (
+                    <>
+                      <Stars value={ratingAvg} />
+                      <span className="text-sm text-slate-700 dark:text-slate-300">
+                        {ratingAvg.toFixed(1)} <span className="text-slate-500">({ratingCount})</span>
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-sm text-slate-500 dark:text-slate-400">No ratings yet</span>
+                  )}
+                </div>
+
                 {profile.isActive === false && (
-                  <p className="text-red-600 text-sm mt-1">
-                    This account is inactive.
-                  </p>
+                  <p className="text-red-600 text-sm mt-1">This account is inactive.</p>
                 )}
               </div>
             </div>
@@ -674,11 +922,7 @@ const UserProfile = () => {
                       Let others know you can teach
                     </div>
                   </div>
-                  <MacToggle
-                    checked={profile.readyToTeach}
-                    onClick={toggleTutorMode}
-                    disabled={toggling}
-                  />
+                  <MacToggle checked={profile.readyToTeach} onClick={toggleTutorMode} disabled={toggling} />
                 </div>
               )}
 
@@ -732,29 +976,14 @@ const UserProfile = () => {
 
         {/* Tabs */}
         <div className="flex gap-2">
-          <MacButton
-            className={tab === "overview" ? "bg-black/10 dark:bg-white/10" : ""}
-            onClick={() => setTab("overview")}
-          >
+          <MacButton className={tab === "overview" ? "bg-black/10 dark:bg-white/10" : ""} onClick={() => setTab("overview")}>
             Overview
           </MacButton>
-          <MacButton
-            className={tab === "teaching" ? "bg-black/10 dark:bg-white/10" : ""}
-            onClick={() => setTab("teaching")}
-          >
-            Teaching{" "}
-            <Chip className="ml-2 bg-black/5 dark:bg-white/10">
-              {acceptedRequests.length}
-            </Chip>
+          <MacButton className={tab === "teaching" ? "bg-black/10 dark:bg-white/10" : ""} onClick={() => setTab("teaching")}>
+            Teaching <Chip className="ml-2 bg-black/5 dark:bg-white/10">{acceptedRequests.length}</Chip>
           </MacButton>
-          <MacButton
-            className={tab === "learning" ? "bg-black/10 dark:bg-white/10" : ""}
-            onClick={() => setTab("learning")}
-          >
-            Learning{" "}
-            <Chip className="ml-2 bg-black/5 dark:bg-white/10">
-              {learningRequests.length}
-            </Chip>
+          <MacButton className={tab === "learning" ? "bg-black/10 dark:bg-white/10" : ""} onClick={() => setTab("learning")}>
+            Learning <Chip className="ml-2 bg-black/5 dark:bg-white/10">{learningRequests.length}</Chip>
           </MacButton>
         </div>
 
@@ -763,8 +992,7 @@ const UserProfile = () => {
           <GlassCard
             className={
               "p-3 " +
-              (message.toLowerCase().includes("fail") ||
-              message.toLowerCase().includes("error")
+              (message.toLowerCase().includes("fail") || message.toLowerCase().includes("error")
                 ? "ring-1 ring-red-300/50"
                 : "ring-1 ring-emerald-300/50")
             }
@@ -776,172 +1004,65 @@ const UserProfile = () => {
         {/* Panels */}
         {tab === "overview" && (
           <>
-            {/* Notifications */}
-            <SectionCard
-              title="Notifications"
-              action={
-                <div className="flex gap-2">
-                  <MacButton onClick={loadNotifs} className="text-sm">
-                    Refresh
-                  </MacButton>
-                  <MacButton onClick={markAllRead} className="text-sm">
-                    Mark all read
-                  </MacButton>
-                  <MacDanger onClick={clearAllNotifs} className="text-sm">Clear</MacDanger>
-                </div>
-              }
-            >
-              {loadingNotifs ? (
-                <div className="text-slate-500 dark:text-slate-400">
-                  Loading…
-                </div>
-              ) : notifs.length === 0 ? (
-                <div className="text-slate-600 dark:text-slate-300">
-                  No notifications.
-                </div>
-              ) : (
-                <ul className="divide-y divide-white/30 dark:divide-white/10">
-                  {notifs.map((n) => (
-                    <li
-                      key={n.notificationId}
-                      className="py-3 flex items-start justify-between"
-                    >
-                      <div className="min-w-0 pr-3">
-                        <div className="text-sm font-medium text-slate-900 dark:text-slate-100">
-                          {n.title}
-                          {!n.isRead && (
-                            <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-blue-600 text-white">
-                              new
-                            </span>
-                          )}
-                        </div>
-                        {n.body && (
-                          <div className="text-sm text-slate-600 dark:text-slate-300 mt-0.5">
-                            {n.body}
-                          </div>
-                        )}
-                        <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                          {new Date(n.createdAt).toLocaleString()}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {n.link && (
-                          <MacPrimary
-                            onClick={() => navigate(n.link)}
-                            className="text-sm"
-                          >
-                            View
-                          </MacPrimary>
-                        )}
-                        {!n.isRead && (
-                          <MacButton
-                            onClick={() => markNotifRead(n.notificationId)}
-                            className="text-sm"
-                          >
-                            Mark read
-                          </MacButton>
-                        )}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </SectionCard>
-
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               {/* About / Edit */}
               <SectionCard
                 title="About"
                 action={
                   !isEditing && (
-                    <button
-                      onClick={() => setIsEditing(true)}
-                      className="text-sm text-blue-600 hover:text-blue-700"
-                    >
+                    <button onClick={() => setIsEditing(true)} className="text-sm text-blue-600 hover:text-blue-700">
                       Edit
                     </button>
                   )
                 }
               >
                 {isEditing ? (
-                  <form
-                    onSubmit={saveProfile}
-                    className="space-y-4"
-                    data-testid="profile-edit-form"
-                  >
+                  <form onSubmit={saveProfile} className="space-y-4" data-testid="profile-edit-form">
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
                       {/* Avatar uploader */}
                       <div className="sm:col-span-1">
-                        <label className="text-sm text-slate-700 dark:text-slate-300">
-                          Profile Photo
-                        </label>
+                        <label className="text-sm text-slate-700 dark:text-slate-300">Profile Photo</label>
                         <div
                           className="mt-2 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 py-8 px-1 text-center bg-white/60 dark:bg-ink-800/50"
-                          onDragOver={prevent}
+                          onDragOver={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                          }}
                           onDrop={(e) => {
-                            prevent(e);
+                            e.preventDefault();
+                            e.stopPropagation();
                             const f = e.dataTransfer.files?.[0];
                             if (f) setProfileFile(f);
                           }}
                         >
                           <div className=" w-16 h-16 mx-auto rounded-full overflow-hidden shadow bg-white">
                             {photoPreview ? (
-                              <img
-                                src={photoPreview}
-                                alt="preview"
-                                className="w-full h-full object-cover"
-                              />
+                              <img src={photoPreview} alt="preview" className="w-full h-full object-cover" />
                             ) : avatar ? (
-                              <img
-                                src={avatar}
-                                alt={profile.fullName}
-                                className="w-full h-full object-cover"
-                              />
+                              <img src={avatar} alt={profile.fullName} className="w-full h-full object-cover" />
                             ) : (
                               <div className="w-full h-full flex items-center justify-center bg-slate-100 dark:bg-ink-800/60">
-                                <span className="text-3xl text-slate-400">
-                                  👤
-                                </span>
+                                <span className="text-3xl text-slate-400">👤</span>
                               </div>
                             )}
                           </div>
 
                           <p className="text-xs text-slate-600 dark:text-slate-400 mt-2">
                             Drag & drop or{" "}
-                            <label
-                              htmlFor="profilePic"
-                              className="text-blue-600 hover:underline cursor-pointer"
-                            >
+                            <label htmlFor="profilePic" className="text-blue-600 hover:underline cursor-pointer">
                               browse
                             </label>
                           </p>
-                          <p className="text-[11px] text-slate-500">
-                            Max 2MB • JPG/PNG
-                          </p>
-                          <input
-                            id="profilePic"
-                            type="file"
-                            accept="image/*"
-                            className="hidden"
-                            onChange={onPhotoChange}
-                          />
+                          <p className="text-[11px] text-slate-500">Max 2MB • JPG/PNG</p>
+                          <input id="profilePic" type="file" accept="image/*" className="hidden" onChange={(e) => setProfileFile(e.target.files?.[0])} />
 
                           {(photoPreview || profile.profilePicture) && (
                             <button
                               type="button"
-                              onClick={
-                                photoPreview
-                                  ? () => {
-                                      setPhotoFile(null);
-                                      setPhotoPreview("");
-                                    }
-                                  : removeProfilePhoto
-                              }
+                              onClick={photoPreview ? () => { setPhotoFile(null); setPhotoPreview(""); } : removeProfilePhoto}
                               className="mt-3 text-xs text-red-600 hover:text-red-700"
                             >
-                              {photoPreview
-                                ? "Clear selected photo"
-                                : "Remove current photo"}
+                              {photoPreview ? "Clear selected photo" : "Remove current photo"}
                             </button>
                           )}
                         </div>
@@ -950,9 +1071,7 @@ const UserProfile = () => {
                       {/* Text fields */}
                       <div className="sm:col-span-2 space-y-4">
                         <div>
-                          <label className="text-sm text-slate-700 dark:text-slate-300">
-                            Full Name
-                          </label>
+                          <label className="text-sm text-slate-700 dark:text-slate-300">Full Name</label>
                           <input
                             name="fullName"
                             data-testid="profile-fullname"
@@ -963,9 +1082,7 @@ const UserProfile = () => {
                           />
                         </div>
                         <div>
-                          <label className="text-sm text-slate-700 dark:text-slate-300">
-                            Bio
-                          </label>
+                          <label className="text-sm text-slate-700 dark:text-slate-300">Bio</label>
                           <textarea
                             name="bio"
                             rows={3}
@@ -975,9 +1092,7 @@ const UserProfile = () => {
                           />
                         </div>
                         <div>
-                          <label className="text-sm text-slate-700 dark:text-slate-300">
-                            Location
-                          </label>
+                          <label className="text-sm text-slate-700 dark:text-slate-300">Location</label>
                           <input
                             name="location"
                             className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400/30 border-white/40 dark:border-white/10 bg-ink-500/10 dark:bg-ink-800/60 text-slate-800 dark:text-slate-200"
@@ -1007,37 +1122,23 @@ const UserProfile = () => {
                 ) : (
                   <div className="space-y-4">
                     <div>
-                      <div className="text-sm text-slate-500 dark:text-slate-400">
-                        Email
-                      </div>
-                      <div className="text-slate-900 dark:text-slate-100">
-                        {profile.email}
-                      </div>
+                      <div className="text-sm text-slate-500 dark:text-slate-400">Email</div>
+                      <div className="text-slate-900 dark:text-slate-100">{profile.email}</div>
                     </div>
                     <div>
-                      <div className="text-sm text-slate-500 dark:text-slate-400">
-                        Member Since
-                      </div>
+                      <div className="text-sm text-slate-500 dark:text-slate-400">Member Since</div>
                       <div className="text-slate-900 dark:text-slate-100">
                         {new Date(profile.createdAt).toLocaleDateString()}
                       </div>
                     </div>
                     <div>
-                      <div className="text-sm text-slate-500 dark:text-slate-400">
-                        About
-                      </div>
-                      <div className="text-slate-900 dark:text-slate-100">
-                        {profile.bio || "No bio yet."}
-                      </div>
+                      <div className="text-sm text-slate-500 dark:text-slate-400">About</div>
+                      <div className="text-slate-900 dark:text-slate-100">{profile.bio || "No bio yet."}</div>
                     </div>
                     {profile.location && (
                       <div>
-                        <div className="text-sm text-slate-500 dark:text-slate-400">
-                          Location
-                        </div>
-                        <div className="text-slate-900 dark:text-slate-100">
-                          {profile.location}
-                        </div>
+                        <div className="text-sm text-slate-500 dark:text-slate-400">Location</div>
+                        <div className="text-slate-900 dark:text-slate-100">{profile.location}</div>
                       </div>
                     )}
                   </div>
@@ -1049,56 +1150,38 @@ const UserProfile = () => {
                 <div className="grid grid-cols-2 gap-4">
                   {/* Teaching */}
                   <div className="p-4 rounded-xl border border-black/10 dark:border-white/10 bg-white/100 dark:bg-ink-800/40">
-                    <div className="text-sm text-slate-600 dark:text-slate-400">
-                      Teaching (Total)
-                    </div>
+                    <div className="text-sm text-slate-600 dark:text-slate-400">Teaching (Total)</div>
                     <div className="text-2xl font-semibold text-slate-900 dark:text-slate-100">
                       {overviewStats.totalTeach}
                     </div>
                     <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                      {overviewStats.scheduledTeach} scheduled •{" "}
-                      {overviewStats.completedTeach} completed
+                      {overviewStats.scheduledTeach} scheduled • {overviewStats.completedTeach} completed
                     </div>
                   </div>
 
                   {/* Learning */}
                   <div className="p-4 rounded-xl border border-black/10 dark:border-white/10 bg-white/100 dark:bg-ink-800/40">
-                    <div className="text-sm text-slate-600 dark:text-slate-400">
-                      Learning (Total)
-                    </div>
+                    <div className="text-sm text-slate-600 dark:text-slate-400">Learning (Total)</div>
                     <div className="text-2xl font-semibold text-slate-900 dark:text-slate-100">
                       {overviewStats.totalLearn}
                     </div>
                     <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                      {overviewStats.scheduledLearn} scheduled •{" "}
-                      {overviewStats.completedLearn} completed
+                      {overviewStats.scheduledLearn} scheduled • {overviewStats.completedLearn} completed
                     </div>
                   </div>
 
                   {/* Following */}
                   <div className="p-4 rounded-xl border border-black/10 dark:border-white/10 bg-white/100 dark:bg-ink-800/40">
-                    <div className="text-sm text-slate-600 dark:text-slate-400">
-                      Following
-                    </div>
-                    <div className="text-2xl font-semibold text-blue-600">
-                      {loadingSocial ? "…" : followingCount}
-                    </div>
-                    <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                      People you follow
-                    </div>
+                    <div className="text-sm text-slate-600 dark:text-slate-400">Following</div>
+                    <div className="text-2xl font-semibold text-blue-600">{loadingSocial ? "…" : followingCount}</div>
+                    <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">People you follow</div>
                   </div>
 
                   {/* Followers */}
                   <div className="p-4 rounded-xl border border-black/10 dark:border-white/10 bg-white/100 dark:bg-ink-800/40">
-                    <div className="text-sm text-slate-600 dark:text-slate-400">
-                      Followers
-                    </div>
-                    <div className="text-2xl font-semibold text-emerald-600">
-                      {loadingSocial ? "…" : followersCount}
-                    </div>
-                    <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                      People who follow you
-                    </div>
+                    <div className="text-sm text-slate-600 dark:text-slate-400">Followers</div>
+                    <div className="text-2xl font-semibold text-emerald-600">{loadingSocial ? "…" : followersCount}</div>
+                    <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">People who follow you</div>
                   </div>
                 </div>
               </SectionCard>
@@ -1108,14 +1191,8 @@ const UserProfile = () => {
                 <div className="space-y-4">
                   <div className="flex justify-between items-center">
                     <div>
-                      <div className="text-sm text-slate-600 dark:text-slate-400">
-                        Status
-                      </div>
-                      <div
-                        className={`text-sm font-medium ${
-                          profile.isActive ? "text-emerald-600" : "text-red-600"
-                        }`}
-                      >
+                      <div className="text-sm text-slate-600 dark:text-slate-400">Status</div>
+                      <div className={`text-sm font-medium ${profile.isActive ? "text-emerald-600" : "text-red-600"}`}>
                         {profile.isActive ? "Active" : "Inactive"}
                       </div>
                     </div>
@@ -1123,17 +1200,11 @@ const UserProfile = () => {
                   </div>
 
                   <div className="border-t border-black/10 dark:border-white/10 pt-4">
-                    <div className="text-sm text-slate-700 dark:text-slate-300 font-medium">
-                      Danger Zone
-                    </div>
+                    <div className="text-sm text-slate-700 dark:text-slate-300 font-medium">Danger Zone</div>
                     <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-                      Deactivate your account to hide your profile and suspend
-                      usage. You can ask an admin to reactivate later.
+                      Deactivate your account to hide your profile and suspend usage. You can ask an admin to reactivate later.
                     </p>
-                    <MacDanger
-                      className="mt-3"
-                      onClick={() => setConfirmDeactivate(true)}
-                    >
+                    <MacDanger className="mt-3" onClick={() => setConfirmDeactivate(true)}>
                       Deactivate Account
                     </MacDanger>
                   </div>
@@ -1144,11 +1215,7 @@ const UserProfile = () => {
             {/* My Skills */}
             <SectionCard
               title="My Skills"
-              action={
-                <MacButton onClick={() => navigate("/skill")} className="text-sm">
-                  Manage
-                </MacButton>
-              }
+              action={<MacButton onClick={() => navigate("/skill")} className="text-sm">Manage</MacButton>}
               className=" pb-16"
             >
               {loadingSkills ? (
@@ -1165,8 +1232,7 @@ const UserProfile = () => {
                 </div>
               ) : skills.length === 0 ? (
                 <div className="text-slate-600 dark:text-slate-300">
-                  You haven’t added any skills yet. Click <b>Manage</b> to add
-                  some.
+                  You haven’t added any skills yet. Click <b>Manage</b> to add some.
                 </div>
               ) : (
                 <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1207,10 +1273,7 @@ const UserProfile = () => {
           <SectionCard
             title="Requests I Accepted (Teaching)"
             action={
-              <button
-                onClick={loadTeaching}
-                className="text-sm text-blue-600 hover:text-blue-700"
-              >
+              <button onClick={loadTeaching} className="text-sm text-blue-600 hover:text-blue-700">
                 Refresh
               </button>
             }
@@ -1218,21 +1281,14 @@ const UserProfile = () => {
             {loadingTeach ? (
               <div className="text-slate-500 dark:text-slate-400">Loading…</div>
             ) : acceptedRequests.length === 0 ? (
-              <div className="text-slate-600 dark:text-slate-300">
-                You haven’t accepted any requests yet.
-              </div>
+              <div className="text-slate-600 dark:text-slate-300">You haven’t accepted any requests yet.</div>
             ) : (
               <ul className="divide-y divide-white/30 dark:divide-white/10">
                 {acceptedRequests.map((r) => (
-                  <li
-                    key={r.acceptedRequestId}
-                    className="py-4 flex items-start justify-between"
-                  >
+                  <li key={r.acceptedRequestId} className="py-4 flex items-start justify-between">
                     <div className="min-w-0 pr-4">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <p className="font-medium text-slate-900 dark:text-slate-100">
-                          {r.skillName}
-                        </p>
+                        <p className="font-medium text-slate-900 dark:text-slate-100">{r.skillName}</p>
                         <Chip
                           className={
                             chipByStatus[r.status] ||
@@ -1242,42 +1298,22 @@ const UserProfile = () => {
                           {r.status}
                         </Chip>
                       </div>
-                      {r.topic && (
-                        <p className="text-sm text-slate-600 dark:text-slate-300 mt-0.5">
-                          {r.topic}
-                        </p>
-                      )}
-                      {r.description && (
-                        <p className="text-sm text-slate-700 dark:text-slate-200 mt-1">
-                          {r.description}
-                        </p>
-                      )}
+                      {r.topic && <p className="text-sm text-slate-600 dark:text-slate-300 mt-0.5">{r.topic}</p>}
+                      {r.description && <p className="text-sm text-slate-700 dark:text-slate-200 mt-1">{r.description}</p>}
                       <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">
-                        Requested by: {r.requesterName} ({r.requesterEmail}) •
-                        Accepted on{" "}
+                        Requested by: {r.requesterName} ({r.requesterEmail}) • Accepted on{" "}
                         {new Date(r.acceptedAt).toLocaleDateString()}
                       </p>
 
                       {r.status === "SCHEDULED" && (
                         <div className="mt-2 p-3 rounded-xl border border-white/40 dark:border-white/10 bg-blue-50/70 dark:bg-blue-900/20 text-sm">
-                          <p className="text-blue-800 dark:text-blue-200 font-medium">
-                            Scheduled Meeting
-                          </p>
-                          <p className="text-blue-700 dark:text-blue-300">
-                            Date: {formatDate(r.scheduleDate)}
-                          </p>
-                          <p className="text-blue-700 dark:text-blue-300">
-                            Type: {r.meetingType}
-                          </p>
+                          <p className="text-blue-800 dark:text-blue-200 font-medium">Scheduled Meeting</p>
+                          <p className="text-blue-700 dark:text-blue-300">Date: {formatDate(r.scheduleDate)}</p>
+                          <p className="text-blue-700 dark:text-blue-300">Type: {r.meetingType}</p>
                           {r.meetingType === "ONLINE" && r.meetingLink && (
                             <p className="text-blue-700 dark:text-blue-300 truncate">
                               Link:{" "}
-                              <a
-                                href={r.meetingLink}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="underline"
-                              >
+                              <a href={r.meetingLink} target="_blank" rel="noopener noreferrer" className="underline">
                                 {r.meetingLink}
                               </a>
                             </p>
@@ -1288,10 +1324,7 @@ const UserProfile = () => {
 
                     <div className="flex flex-col items-end gap-2">
                       {r.status === "PENDING" && (
-                        <MacPrimary
-                          onClick={() => openSchedule(r)}
-                          className="text-sm"
-                        >
+                        <MacPrimary onClick={() => openSchedule(r)} className="text-sm">
                           Schedule
                         </MacPrimary>
                       )}
@@ -1307,10 +1340,7 @@ const UserProfile = () => {
           <SectionCard
             title="Requests I Asked For (Learning)"
             action={
-              <button
-                onClick={loadLearning}
-                className="text-sm text-blue-600 hover:text-blue-700"
-              >
+              <button onClick={loadLearning} className="text-sm text-blue-600 hover:text-blue-700">
                 Refresh
               </button>
             }
@@ -1318,9 +1348,7 @@ const UserProfile = () => {
             {loadingLearn ? (
               <div className="text-slate-500 dark:text-slate-400">Loading…</div>
             ) : learningRequests.length === 0 ? (
-              <div className="text-slate-600 dark:text-slate-300">
-                You haven’t made any requests yet.
-              </div>
+              <div className="text-slate-600 dark:text-slate-300">You haven’t made any requests yet.</div>
             ) : (
               <ul className="divide-y divide-white/30 dark:divide-white/10">
                 {learningRequests.map((r) => (
@@ -1328,9 +1356,7 @@ const UserProfile = () => {
                     <div className="flex items-center justify-between">
                       <div className="min-w-0 pr-4">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <p className="font-medium text-slate-900 dark:text-slate-100">
-                            {r.skillName}
-                          </p>
+                          <p className="font-medium text-slate-900 dark:text-slate-100">{r.skillName}</p>
                           <Chip
                             className={
                               chipByStatus[r.status] ||
@@ -1340,36 +1366,17 @@ const UserProfile = () => {
                             {r.status}
                           </Chip>
                         </div>
-                        {r.topic && (
-                          <p className="text-sm text-slate-600 dark:text-slate-300 mt-0.5">
-                            {r.topic}
-                          </p>
-                        )}
-                        {r.description && (
-                          <p className="text-sm text-slate-700 dark:text-slate-200 mt-1">
-                            {r.description}
-                          </p>
-                        )}
+                        {r.topic && <p className="text-sm text-slate-600 dark:text-slate-300 mt-0.5">{r.topic}</p>}
+                        {r.description && <p className="text-sm text-slate-700 dark:text-slate-200 mt-1">{r.description}</p>}
                         {r.status === "SCHEDULED" && (
                           <div className="mt-2 p-3 rounded-xl border border-white/40 dark:border-white/10 bg-blue-50/70 dark:bg-blue-900/20 text-sm">
-                            <p className="text-blue-800 dark:text-blue-200 font-medium">
-                              Scheduled Meeting
-                            </p>
-                            <p className="text-blue-700 dark:text-blue-300">
-                              Date: {formatDate(r.scheduleDate)}
-                            </p>
-                            <p className="text-blue-700 dark:text-blue-300">
-                              Type: {r.meetingType}
-                            </p>
+                            <p className="text-blue-800 dark:text-blue-200 font-medium">Scheduled Meeting</p>
+                            <p className="text-blue-700 dark:text-blue-300">Date: {formatDate(r.scheduleDate)}</p>
+                            <p className="text-blue-700 dark:text-blue-300">Type: {r.meetingType}</p>
                             {r.meetingType === "ONLINE" && r.meetingLink && (
                               <p className="text-blue-700 dark:text-blue-300 truncate">
                                 Link:{" "}
-                                <a
-                                  href={r.meetingLink}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="underline"
-                                >
+                                <a href={r.meetingLink} target="_blank" rel="noopener noreferrer" className="underline">
                                   {r.meetingLink}
                                 </a>
                               </p>
@@ -1380,10 +1387,7 @@ const UserProfile = () => {
 
                       <div className="flex items-center gap-2">
                         {r.status === "SCHEDULED" && (
-                          <MacPrimary
-                            onClick={() => navigate("/VideoSession")}
-                            className="text-sm"
-                          >
+                          <MacPrimary onClick={() => navigate("/VideoSession")} className="text-sm">
                             Join
                           </MacPrimary>
                         )}
@@ -1408,37 +1412,23 @@ const UserProfile = () => {
             </div>
             <form onSubmit={doSchedule} className="p-6 space-y-4">
               <div>
-                <label className="text-sm text-slate-700 dark:text-slate-300">
-                  Date & Time *
-                </label>
+                <label className="text-sm text-slate-700 dark:text-slate-300">Date & Time *</label>
                 <input
                   type="datetime-local"
                   name="scheduleDate"
                   value={scheduleForm.scheduleDate}
-                  onChange={(e) =>
-                    setScheduleForm((p) => ({
-                      ...p,
-                      scheduleDate: e.target.value,
-                    }))
-                  }
+                  onChange={(e) => setScheduleForm((p) => ({ ...p, scheduleDate: e.target.value }))}
                   className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400/30 border-white/40 dark:border-white/10 bg-white/70 dark:bg-ink-800/60 text-slate-800 dark:text-slate-200"
                   required
                 />
               </div>
 
               <div>
-                <label className="text-sm text-slate-700 dark:text-slate-300">
-                  Meeting Type *
-                </label>
+                <label className="text-sm text-slate-700 dark:text-slate-300">Meeting Type *</label>
                 <select
                   name="meetingType"
                   value={scheduleForm.meetingType}
-                  onChange={(e) =>
-                    setScheduleForm((p) => ({
-                      ...p,
-                      meetingType: e.target.value,
-                    }))
-                  }
+                  onChange={(e) => setScheduleForm((p) => ({ ...p, meetingType: e.target.value }))}
                   className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400/30 border-white/40 dark:border-white/10 bg-white/70 dark:bg-ink-800/60 text-slate-800 dark:text-slate-200"
                 >
                   <option value="ONLINE">Online</option>
@@ -1448,20 +1438,13 @@ const UserProfile = () => {
 
               {scheduleForm.meetingType === "ONLINE" && (
                 <div>
-                  <label className="text-sm text-slate-700 dark:text-slate-300">
-                    Meeting Link *
-                  </label>
+                  <label className="text-sm text-slate-700 dark:text-slate-300">Meeting Link *</label>
                   <input
                     type="url"
                     name="meetingLink"
                     placeholder="https://meet.google.com/xxx-xxxx-xxx"
                     value={scheduleForm.meetingLink}
-                    onChange={(e) =>
-                      setScheduleForm((p) => ({
-                        ...p,
-                        meetingLink: e.target.value,
-                      }))
-                    }
+                    onChange={(e) => setScheduleForm((p) => ({ ...p, meetingLink: e.target.value }))}
                     required
                     className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400/30 border-white/40 dark:border-white/10 bg-white/70 dark:bg-ink-800/60 text-slate-800 dark:text-slate-200"
                   />
@@ -1492,14 +1475,11 @@ const UserProfile = () => {
             </div>
             <div className="p-6 space-y-3">
               <p className="text-sm text-slate-700 dark:text-slate-300">
-                Are you sure you want to deactivate your account? Your profile
-                will be inactive and you will be logged out. You can ask an
+                Are you sure you want to deactivate your account? Your profile will be inactive and you will be logged out. You can ask an
                 admin to reactivate it later.
               </p>
               <div className="flex justify-end gap-2 mt-4">
-                <MacButton onClick={() => setConfirmDeactivate(false)}>
-                  Cancel
-                </MacButton>
+                <MacButton onClick={() => setConfirmDeactivate(false)}>Cancel</MacButton>
                 <MacDanger onClick={deactivateAccount} disabled={deactivating}>
                   {deactivating ? "Deactivating…" : "Deactivate"}
                 </MacDanger>

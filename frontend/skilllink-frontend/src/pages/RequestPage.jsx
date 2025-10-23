@@ -1,10 +1,29 @@
-// src/pages/RequestsPage.jsx
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import Dock from "../components/Dock";
-import { requestsApi, tutorPostsApi } from "../api";
+import { requestsApi, tutorPostsApi, ratingsApi } from "../api";
 import { toImageUrl } from "../utils/image";
+import StarRating from "../components/StarRating";
+import SettingsMenu from "../components/SettingsMenu";
+
+const SKIP_RATING_KEY = "ratings:skipped:v1";
+const loadSkipSet = () => {
+  try {
+    const raw = localStorage.getItem(SKIP_RATING_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return new Set(arr);
+  } catch {
+    return new Set();
+  }
+};
+const addSkip = (acceptedRequestId) => {
+  const s = loadSkipSet();
+  s.add(String(acceptedRequestId));
+  localStorage.setItem(SKIP_RATING_KEY, JSON.stringify([...s]));
+  return s;
+};
+const hasSkipped = (acceptedRequestId) => loadSkipSet().has(String(acceptedRequestId));
 
 /* ========================== UI Atoms ========================== */
 const GlassCard = ({ className = "", children }) => (
@@ -94,13 +113,25 @@ const Chip = ({ children, className = "" }) => (
   </span>
 );
 
-/* choose the best accepted row per request (prefer SCHEDULED, else latest) */
-const pickBetterAccepted = (curr, cand) => {
+// Prefer COMPLETED, then SCHEDULED, else newest by acceptedAt
+const pickBestAccepted = (curr, cand) => {
   if (!curr) return cand;
-  const s1 = (curr.status || "").toUpperCase() === "SCHEDULED";
-  const s2 = (cand.status || "").toUpperCase() === "SCHEDULED";
-  if (s2 && !s1) return cand;
-  if (!s2 && s1) return curr;
+  const rank = (s) => {
+    switch ((s || "").toUpperCase()) {
+      case "COMPLETED":
+        return 3;
+      case "SCHEDULED":
+        return 2;
+      case "ACCEPTED":
+        return 1;
+      default:
+        return 0;
+    }
+  };
+  const r1 = rank(curr.status);
+  const r2 = rank(cand.status);
+  if (r1 !== r2) return (r2 > r1 ? cand : curr);
+
   const a1 = curr.acceptedAt ? new Date(curr.acceptedAt).getTime() : 0;
   const a2 = cand.acceptedAt ? new Date(cand.acceptedAt).getTime() : 0;
   return a2 >= a1 ? cand : curr;
@@ -196,10 +227,147 @@ const RequestsPane = () => {
     meetingLink: "",
   });
 
+  // Rating modal
+  const [showRate, setShowRate] = useState(false);
+  const [rateTarget, setRateTarget] = useState(null); // accepted record (or tutor info)
+  const [stars, setStars] = useState(0);
+  const [note, setNote] = useState("");
+  const [ratingBusy, setRatingBusy] = useState(false);
+  const [alreadyRatedCache, setAlreadyRatedCache] = useState(new Set());
+  const [skipSet, setSkipSet] = useState(loadSkipSet());
+
+  /* ---------- tutorId derivation (fix for 400 on ratings) ---------- */
+  const getTutorIdFromAccepted = useCallback(
+    (ar) => {
+      if (!ar) return null;
+
+      // Prefer explicit tutor/user fields on the accepted record if present
+      const direct =
+        ar.tutorId ??
+        ar.tutorUserId ??
+        ar.acceptorId ?? // acceptor is tutor
+        ar.acceptedByTutorId ??
+        (ar.tutor && (ar.tutor.userId ?? ar.tutor.id)) ??
+        null;
+      if (direct) return direct;
+
+      // Fallback to original request preferredTutorId
+      const req = allRequests.find((r) => r.requestId === ar.requestId);
+      if (req?.preferredTutorId) return req.preferredTutorId;
+
+      return null;
+    },
+    [allRequests]
+  );
+
+  const openRate = async (acceptedRecord) => {
+    // honor local skip
+    if (hasSkipped(acceptedRecord.acceptedRequestId)) {
+      setMessage("You chose to skip rating this session.");
+      return;
+    }
+
+    if (!alreadyRatedCache.has(acceptedRecord.acceptedRequestId)) {
+      try {
+        const { data } = await ratingsApi.existsForAccepted(acceptedRecord.acceptedRequestId);
+        if (data?.exists) {
+          setAlreadyRatedCache((s) => new Set([...s, acceptedRecord.acceptedRequestId]));
+          setMessage("You already rated this session. Thanks!");
+          return;
+        }
+      } catch {}
+    }
+
+    const best =
+      acceptedRequests
+        .filter((ar) => ar.requestId === acceptedRecord.requestId)
+        .reduce(pickBestAccepted, null) || acceptedRecord;
+
+    if ((best.status || "").toUpperCase() !== "COMPLETED") {
+      setMessage("You can only rate a completed session.");
+      return;
+    }
+
+    const tid = getTutorIdFromAccepted(best);
+    setRateTarget({ ...best, tutorId: tid });
+    setStars(0);
+    setNote("");
+    setShowRate(true);
+  };
+
+  const skipRatingForThisSession = () => {
+    if (!rateTarget) return;
+    const next = addSkip(rateTarget.acceptedRequestId);
+    setSkipSet(next);
+    setShowRate(false);
+    setRateTarget(null);
+    setMessage("No problem — we won't ask you to rate this session again.");
+  };
+
+  const submitRating = async (e) => {
+    e.preventDefault();
+    if (!rateTarget || stars === 0) return;
+    try {
+      setRatingBusy(true);
+
+      const tutorId = rateTarget.tutorId ?? getTutorIdFromAccepted(rateTarget);
+      if (!tutorId) {
+        setMessage("Couldn't determine the tutor for this session. Try refreshing the page.");
+        return;
+      }
+
+      await ratingsApi.create({
+        tutorId,
+        acceptedRequestId: rateTarget.acceptedRequestId,
+        rating: stars,
+        comment: note?.trim() || "",
+      });
+
+      setAlreadyRatedCache((s) => new Set([...s, rateTarget.acceptedRequestId]));
+      setShowRate(false);
+      setRateTarget(null);
+      setMessage("Thanks for rating your tutor!");
+    } catch (err) {
+      setMessage(
+        err?.response?.data?.message || err?.message || "Couldn't submit rating"
+      );
+    } finally {
+      setRatingBusy(false);
+    }
+  };
+
+  // --- Zoom helpers (no API integration needed) ---
+  const ZOOM_CREATE_URL = "https://zoom.us/start/videomeeting";
+  const isZoomUrl = (u) =>
+    typeof u === "string" &&
+    /^(zoommtg:\/\/|https?:\/\/[\w.-]*zoom\.us\/(j|s)\/)/i.test(u.trim());
+
+  const openZoomCreate = () => {
+    window.open(ZOOM_CREATE_URL, "_blank", "noopener,noreferrer");
+  };
+
+  const pasteZoomFromClipboard = async () => {
+    try {
+      if (!navigator.clipboard || !window.isSecureContext) {
+        setMessage("Clipboard read not available; paste the link manually.");
+        return;
+      }
+      const text = (await navigator.clipboard.readText())?.trim();
+      if (isZoomUrl(text)) {
+        setSchedForm((p) => ({ ...p, meetingType: "ONLINE", meetingLink: text }));
+        setMessage("Zoom link pasted from clipboard.");
+      } else {
+        setMessage("Clipboard doesn't look like a Zoom link. Copy it from Zoom and try again.");
+      }
+    } catch {
+      setMessage("Couldn't read clipboard. Paste manually.");
+    }
+  };
+
   // Tick state (so Finish can appear automatically once time passes)
   const [, setNowTick] = useState(Date.now());
   useEffect(() => {
-    const id = setInterval(() => setNowTick(Date.now()), 30000); // 30s
+    const id = setInterval(() => setNowTick(Date.now()), 30000);
     return () => clearInterval(id);
   }, []);
 
@@ -207,7 +375,7 @@ const RequestsPane = () => {
   const acceptedByRequest = useMemo(() => {
     const m = {};
     for (const ar of acceptedRequests) {
-      m[ar.requestId] = pickBetterAccepted(m[ar.requestId], ar);
+      m[ar.requestId] = pickBestAccepted(m[ar.requestId], ar);
     }
     return m;
   }, [acceptedRequests]);
@@ -228,10 +396,13 @@ const RequestsPane = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const isDirectedToMe = useCallback((r) => {
-    const uid = `${user?.userId ?? ""}`;
-    return r?.preferredTutorId != null && `${r.preferredTutorId}` === uid;
-  }, [user?.userId]);
+  const isDirectedToMe = useCallback(
+    (r) => {
+      const uid = `${user?.userId ?? ""}`;
+      return r?.preferredTutorId != null && `${r.preferredTutorId}` === uid;
+    },
+    [user?.userId]
+  );
 
   const loadAll = async () => {
     try {
@@ -306,10 +477,9 @@ const RequestsPane = () => {
 
   const openSchedule = (acceptedRecord) => {
     setSchedTarget(acceptedRecord);
-    const initialDate =
-      acceptedRecord?.scheduleDate
-        ? formatDateTimeLocal(acceptedRecord.scheduleDate)
-        : formatDateTimeLocal(new Date());
+    const initialDate = acceptedRecord?.scheduleDate
+      ? formatDateTimeLocal(acceptedRecord.scheduleDate)
+      : formatDateTimeLocal(new Date());
     setSchedForm({
       scheduleDate: initialDate,
       meetingType: acceptedRecord?.meetingType || "ONLINE",
@@ -339,8 +509,7 @@ const RequestsPane = () => {
                 status: "SCHEDULED",
                 scheduleDate: new Date(schedForm.scheduleDate).toISOString(),
                 meetingType: schedForm.meetingType,
-                meetingLink:
-                  schedForm.meetingType === "ONLINE" ? schedForm.meetingLink : "",
+                meetingLink: schedForm.meetingType === "ONLINE" ? schedForm.meetingLink : "",
               }
             : ar
         )
@@ -377,9 +546,7 @@ const RequestsPane = () => {
       );
       setAllRequests((prev) =>
         prev.map((r) =>
-          r.requestId === acceptedRecord.requestId
-            ? { ...r, status: "COMPLETED" }
-            : r
+          r.requestId === acceptedRecord.requestId ? { ...r, status: "COMPLETED" } : r
         )
       );
 
@@ -615,9 +782,7 @@ const RequestsPane = () => {
                       {/* Scheduled summary — BOTH sides */}
                       {isSched && (
                         <div className="mt-3 p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-blue-50/70 dark:bg-blue-900/20 text-sm">
-                          <p className="text-blue-800 dark:text-blue-200 font-medium">
-                            Scheduled
-                          </p>
+                          <p className="text-blue-800 dark:text-blue-200 font-medium">Scheduled</p>
                           <p className="text-blue-700 dark:text-blue-300">
                             Date: {new Date(acceptedRec.scheduleDate).toLocaleString()}
                           </p>
@@ -660,23 +825,17 @@ const RequestsPane = () => {
                           {!isOwner && (
                             <>
                               {request.status === "CANCELLED" ? (
-                                <MacDanger
-                                  onClick={() => removeRequestPermanently(request.requestId)}
-                                >
+                                <MacDanger onClick={() => removeRequestPermanently(request.requestId)}>
                                   Remove
                                 </MacDanger>
                               ) : (
                                 <>
                                   {directedToMe && !accepted && request.status === "PENDING" && (
                                     <>
-                                      <MacPrimary
-                                        onClick={() => acceptRequest(request.requestId)}
-                                      >
+                                      <MacPrimary onClick={() => acceptRequest(request.requestId)}>
                                         Accept
                                       </MacPrimary>
-                                      <MacDanger
-                                        onClick={() => declineDirected(request.requestId)}
-                                      >
+                                      <MacDanger onClick={() => declineDirected(request.requestId)}>
                                         Decline
                                       </MacDanger>
                                     </>
@@ -717,9 +876,7 @@ const RequestsPane = () => {
                           {isOwner && (
                             <>
                               {request.status === "CANCELLED" ? (
-                                <MacDanger
-                                  onClick={() => removeRequestPermanently(request.requestId)}
-                                >
+                                <MacDanger onClick={() => removeRequestPermanently(request.requestId)}>
                                   Remove
                                 </MacDanger>
                               ) : (
@@ -727,7 +884,19 @@ const RequestsPane = () => {
                                   {(() => {
                                     const st = (request.status || "").toUpperCase();
                                     const isCompleted = st === "COMPLETED";
-                                    if (isCompleted) return null;
+                                    const canRate =
+                                      (request.status || "").toUpperCase() === "COMPLETED" &&
+                                      acceptedRec &&
+                                      (acceptedRec.status || "").toUpperCase() === "COMPLETED" &&
+                                      !alreadyRatedCache.has(acceptedRec.acceptedRequestId);
+                                    if (isCompleted) {
+                                      return canRate ? (
+                                        <MacPrimary onClick={() => openRate(acceptedRec)}>
+                                          Rate Tutor
+                                        </MacPrimary>
+                                      ) : null;
+                                    }
+
                                     return (
                                       <>
                                         {st === "PENDING" && (
@@ -736,9 +905,7 @@ const RequestsPane = () => {
                                           </MacButton>
                                         )}
                                         {/* Keep Delete even when SCHEDULED; hide only when COMPLETED */}
-                                        <MacDanger
-                                          onClick={() => deleteRequest(request.requestId)}
-                                        >
+                                        <MacDanger onClick={() => deleteRequest(request.requestId)}>
                                           Delete
                                         </MacDanger>
                                       </>
@@ -773,9 +940,7 @@ const RequestsPane = () => {
             </div>
             <form onSubmit={createRequest} className="p-6 space-y-4">
               <div>
-                <label className="block text-sm text-slate-700 dark:text-slate-300">
-                  Skill Name *
-                </label>
+                <label className="block text-sm text-slate-700 dark:text-slate-300">Skill Name *</label>
                 <input
                   type="text"
                   name="skillName"
@@ -798,9 +963,7 @@ const RequestsPane = () => {
                 />
               </div>
               <div>
-                <label className="block text-sm text-slate-700 dark:text-slate-300">
-                  Description
-                </label>
+                <label className="block text-sm text-slate-700 dark:text-slate-300">Description</label>
                 <textarea
                   name="description"
                   value={formData.description}
@@ -834,15 +997,11 @@ const RequestsPane = () => {
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
           <GlassCard className="w-full max-w-md">
             <div className="p-6 border-b border-slate-200 dark:border-slate-700">
-              <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100">
-                Edit Request
-              </h2>
+              <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100">Edit Request</h2>
             </div>
             <form onSubmit={updateRequest} className="p-6 space-y-4">
               <div>
-                <label className="block text-sm text-slate-700 dark:text-slate-300">
-                  Skill Name *
-                </label>
+                <label className="block text-sm text-slate-700 dark:text-slate-300">Skill Name *</label>
                 <input
                   type="text"
                   name="skillName"
@@ -853,9 +1012,7 @@ const RequestsPane = () => {
                 />
               </div>
               <div>
-                <label className="block text-sm text-slate-700 dark:text-slate-300">
-                  Topic
-                </label>
+                <label className="block text-sm text-slate-700 dark:text-slate-300">Topic</label>
                 <input
                   type="text"
                   name="topic"
@@ -865,9 +1022,7 @@ const RequestsPane = () => {
                 />
               </div>
               <div>
-                <label className="block text-sm text-slate-700 dark:text-slate-300">
-                  Description
-                </label>
+                <label className="block text-sm text-slate-700 dark:text-slate-300">Description</label>
                 <textarea
                   name="description"
                   value={formData.description}
@@ -906,9 +1061,7 @@ const RequestsPane = () => {
                   type="datetime-local"
                   name="scheduleDate"
                   value={schedForm.scheduleDate}
-                  onChange={(e) =>
-                    setSchedForm((p) => ({ ...p, scheduleDate: e.target.value }))
-                  }
+                  onChange={(e) => setSchedForm((p) => ({ ...p, scheduleDate: e.target.value }))}
                   className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400/30 border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/60 text-slate-800 dark:text-slate-200"
                   required
                 />
@@ -930,6 +1083,26 @@ const RequestsPane = () => {
               {schedForm.meetingType === "ONLINE" && (
                 <div>
                   <label className="text-sm text-slate-700 dark:text-slate-300">Meeting Link *</label>
+
+                  <div className="flex gap-2 mt-1">
+                    <button
+                      type="button"
+                      onClick={openZoomCreate}
+                      className="px-3 py-2 rounded-xl text-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-400/40"
+                      title="Open Zoom in a new tab and start an instant meeting"
+                    >
+                      Generate Zoom link
+                    </button>
+                    <button
+                      type="button"
+                      onClick={pasteZoomFromClipboard}
+                      className="px-3 py-2 rounded-xl text-sm border border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/60 text-slate-700 dark:text-slate-200 hover:bg-black/5 dark:hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-blue-400/30"
+                      title="Paste Zoom link from clipboard"
+                    >
+                      Paste from clipboard
+                    </button>
+                  </div>
+
                   <input
                     type="url"
                     name="meetingLink"
@@ -937,8 +1110,11 @@ const RequestsPane = () => {
                     value={schedForm.meetingLink}
                     onChange={(e) => setSchedForm((p) => ({ ...p, meetingLink: e.target.value }))}
                     required
-                    className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400/30 border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/60 text-slate-800 dark:text-slate-200"
+                    className="mt-2 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400/30 border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/60 text-slate-800 dark:text-slate-200"
                   />
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    Click <em>Generate Zoom link</em>, start the meeting in the new tab, copy the URL, then click <em>Paste from clipboard</em>.
+                  </p>
                 </div>
               )}
 
@@ -949,6 +1125,58 @@ const RequestsPane = () => {
                 <MacPrimary type="submit" disabled={schedBusy}>
                   {schedBusy ? "Saving..." : "Save"}
                 </MacPrimary>
+              </div>
+            </form>
+          </GlassCard>
+        </div>
+      )}
+
+      {/* Rate Tutor Modal */}
+      {showRate && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <GlassCard className="w-full max-w-md">
+            <div className="p-6 border-b border-slate-200 dark:border-slate-700">
+              <h4 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+                Rate your tutor
+              </h4>
+            </div>
+            <form onSubmit={submitRating} className="p-6 space-y-4">
+              <div>
+                <div className="text-sm text-slate-600 dark:text-slate-300 mb-1">
+                  How was your session?
+                </div>
+                <StarRating value={stars} onChange={setStars} />
+              </div>
+
+              <div>
+                <label className="text-sm text-slate-700 dark:text-slate-300">Optional note</label>
+                <textarea
+                  rows={3}
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  placeholder="Share quick feedback that helps others"
+                  className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400/30 border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/60 text-slate-800 dark:text-slate-200"
+                />
+              </div>
+
+              <div className="flex justify-between items-center gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={skipRatingForThisSession}
+                  className="px-3 py-2 rounded-xl text-sm border border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/60 text-slate-700 dark:text-slate-200 hover:bg-black/5 dark:hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-blue-400/30"
+                  title="Hide this prompt for this session"
+                >
+                  Skip
+                </button>
+
+                <div className="flex gap-2">
+                  <MacButton type="button" onClick={() => setShowRate(false)}>
+                    Cancel
+                  </MacButton>
+                  <MacPrimary type="submit" disabled={ratingBusy || stars === 0}>
+                    {ratingBusy ? "Submitting..." : "Submit"}
+                  </MacPrimary>
+                </div>
               </div>
             </form>
           </GlassCard>
@@ -992,8 +1220,30 @@ const LessonsPane = () => {
     return () => clearInterval(id);
   }, []);
 
-  const MAX_IMG_SIZE = 10 * 1024 * 1024; // 10MB
+  // --- Zoom helpers for Lessons ---
+  const ZOOM_CREATE_URL2 = "https://zoom.us/start/videomeeting";
+  const isZoomUrl2 = (u) =>
+    typeof u === "string" && /^(zoommtg:\/\/|https?:\/\/[\w.-]*zoom\.us\/(j|s)\/)/i.test(u?.trim());
+  const openZoomCreate2 = () => window.open(ZOOM_CREATE_URL2, "_blank", "noopener,noreferrer");
+  const pasteZoomFromClipboard2 = async () => {
+    try {
+      if (!navigator.clipboard || !window.isSecureContext) {
+        setMsg("Clipboard read not available; paste manually.");
+        return;
+      }
+      const text = (await navigator.clipboard.readText())?.trim();
+      if (isZoomUrl2(text)) {
+        setMeetingLink(text);
+        setMsg("Zoom link pasted from clipboard.");
+      } else {
+        setMsg("Clipboard doesn't look like a Zoom link.");
+      }
+    } catch {
+      setMsg("Couldn't read clipboard. Paste manually.");
+    }
+  };
 
+  const MAX_IMG_SIZE = 10 * 1024 * 1024; // 10MB
   const isValidImage = (file) => {
     if (!file) return true;
     const okType = file.type.startsWith("image/");
@@ -1045,10 +1295,7 @@ const LessonsPane = () => {
     loadApplied();
   }, []);
 
-  const myLessons = useMemo(
-    () => lessons.filter((l) => l.tutorId === user.userId),
-    [lessons, user?.userId]
-  );
+  const myLessons = useMemo(() => lessons.filter((l) => l.tutorId === user.userId), [lessons, user?.userId]);
 
   const appliedLessons = useMemo(() => {
     const flat = (appliedRaw || []).map((a) => a.post || a);
@@ -1291,9 +1538,7 @@ const LessonsPane = () => {
       <GlassCard key={p.postId} className="p-6">
         <div className="flex justify-between items-start">
           <div>
-            <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-              {p.title}
-            </h2>
+            <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{p.title}</h2>
             <p className="text-slate-600 dark:text-slate-300 mt-1">
               {new Date(p.createdAt).toLocaleDateString()}
             </p>
@@ -1308,9 +1553,7 @@ const LessonsPane = () => {
           </div>
         </div>
 
-        {p.description && (
-          <p className="text-slate-700 dark:text-slate-200 mt-3">{p.description}</p>
-        )}
+        {p.description && <p className="text-slate-700 dark:text-slate-200 mt-3">{p.description}</p>}
 
         {p.imageUrl && (
           <img
@@ -1347,9 +1590,7 @@ const LessonsPane = () => {
               {p.tutorName?.charAt(0).toUpperCase() || "T"}
             </div>
             <div>
-              <span className="font-medium text-slate-800 dark:text-slate-200">
-                {p.tutorName || "Tutor"}
-              </span>
+              <span className="font-medium text-slate-800 dark:text-slate-200">{p.tutorName || "Tutor"}</span>
               <span className="ml-1">• {new Date(p.createdAt).toLocaleDateString()}</span>
             </div>
           </div>
@@ -1357,23 +1598,15 @@ const LessonsPane = () => {
           {/* Tutor actions on own lessons */}
           {p.tutorId === user.userId ? (
             <div className="flex items-center gap-3">
-              {/* Remove Edit when scheduled; keep Delete. Remove ALL when completed */}
-              {!isCompleted && !isScheduledStatus && (
-                <MacButton onClick={() => openEdit(p)}>Edit</MacButton>
-              )}
-              {!isCompleted && (
-                <MacDanger onClick={() => deleteLesson(p.postId)}>Delete</MacDanger>
-              )}
+              {!isCompleted && !isScheduledStatus && <MacButton onClick={() => openEdit(p)}>Edit</MacButton>}
+              {!isCompleted && <MacDanger onClick={() => deleteLesson(p.postId)}>Delete</MacDanger>}
               {!isCompleted && (
                 <MacPrimary onClick={() => openSchedule(p)}>
                   {scheduled ? "Edit Schedule" : "Schedule"}
                 </MacPrimary>
               )}
               {!isCompleted && canFinish && (
-                <MacPrimary
-                  className="bg-green-600 hover:bg-green-700"
-                  onClick={() => finishLesson(p)}
-                >
+                <MacPrimary className="bg-green-600 hover:bg-green-700" onClick={() => finishLesson(p)}>
                   Finish
                 </MacPrimary>
               )}
@@ -1396,9 +1629,7 @@ const LessonsPane = () => {
       <div className="max-w-6xl mx-auto px-6 py-6 space-y-6">
         <GlassCard className="p-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100">
-              Lessons
-            </h2>
+            <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100">Lessons</h2>
             <div className="flex gap-2">
               <MacPrimary onClick={() => setShowCreate(true)}>+ New Lesson</MacPrimary>
               <MacButton
@@ -1512,7 +1743,7 @@ const LessonsPane = () => {
                              file:border-0 file:text-sm file:font-semibold 
                              file:bg-blue-50 file:text-blue-700 
                              hover:file:bg-blue-100
-                             dark:file:bg-slate-800 dark:file:text-slate-200 dark:hover:file:bg-slate-700"
+                             dark:file:bg-slate-800 dark:file:text-slate-200 dark:hover$file:bg-slate-700"
                 />
                 {imageFile && (
                   <div className="mt-1 text-xs text-slate-600 dark:text-slate-400">
@@ -1613,15 +1844,11 @@ const LessonsPane = () => {
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
           <GlassCard className="w-full max-w-md">
             <div className="p-6 border-b border-slate-200 dark:border-slate-700">
-              <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-                Schedule Meeting
-              </h3>
+              <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Schedule Meeting</h3>
             </div>
             <form onSubmit={schedule} className="p-6 space-y-4">
               <div>
-                <label className="block text-sm text-slate-700 dark:text-slate-300">
-                  Date & Time *
-                </label>
+                <label className="block text-sm text-slate-700 dark:text-slate-300">Date & Time *</label>
                 <input
                   type="datetime-local"
                   value={scheduledAt}
@@ -1632,17 +1859,36 @@ const LessonsPane = () => {
               </div>
 
               <div>
-                <label className="block text-sm text-slate-700 dark:text-slate-300">
-                  Meeting Link *
-                </label>
+                <label className="block text-sm text-slate-700 dark:text-slate-300">Meeting Link *</label>
+
+                <div className="flex gap-2 mt-1">
+                  <button
+                    type="button"
+                    onClick={openZoomCreate2}
+                    className="px-3 py-2 rounded-xl text-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-400/40"
+                  >
+                    Generate Zoom link
+                  </button>
+                  <button
+                    type="button"
+                    onClick={pasteZoomFromClipboard2}
+                    className="px-3 py-2 rounded-xl text-sm border border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/60 text-slate-700 dark:text-slate-200 hover:bg-black/5 dark:hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-blue-400/30"
+                  >
+                    Paste from clipboard
+                  </button>
+                </div>
+
                 <input
                   type="url"
                   value={meetingLink}
                   onChange={(e) => setMeetingLink(e.target.value)}
                   placeholder="https://zoom.us/j/123456789 (or Google Meet/Teams link)"
                   required
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/60 text-slate-700 dark:text-slate-200 focus:ring-2 focus:ring-blue-500/40 outline-none"
+                  className="mt-2 w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/60 text-slate-700 dark:text-slate-200 focus:ring-2 focus:ring-blue-500/40 outline-none"
                 />
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Start a Zoom meeting in the new tab, copy the URL, then click <em>Paste from clipboard</em>.
+                </p>
               </div>
 
               <div className="flex justify-end gap-2">
@@ -1713,6 +1959,7 @@ const RequestsPage = () => {
             >
               My Lessons
             </MacButton>
+            <SettingsMenu />
           </div>
         </div>
       </GlassBar>
