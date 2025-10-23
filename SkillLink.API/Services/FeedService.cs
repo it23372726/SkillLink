@@ -10,18 +10,21 @@ namespace SkillLink.API.Services
         private readonly IFeedRepository _feedRepo;
         private readonly IReactionService _reactions;
         private readonly ICommentService _comments;
-        private readonly ISkillRepository _skillRepo; // This is the class field
+        private readonly ISkillRepository _skillRepo;
+        private readonly IRequestService _requestService;
 
         public FeedService(
             IFeedRepository feedRepo,
             IReactionService reactions,
             ICommentService comments,
-            ISkillRepository skillRepo) // This is the parameter
+            ISkillRepository skillRepo,
+            IRequestService requestService) // This is the parameter
         {
             _feedRepo = feedRepo;
             _reactions = reactions;
             _comments = comments;
             _skillRepo = skillRepo; // CORRECTED: Assign parameter to the class field _skillRepo
+            _requestService = requestService;
         }
 
         public List<FeedItemDto> GetFeed(int me, int page, int pageSize, string? q = null)
@@ -43,31 +46,72 @@ namespace SkillLink.API.Services
         }
         
         // This sorting logic is now correct for using profile skills
-        public List<FeedItemDto> GetSort(List<FeedItemDto> data, int me)
+       public List<FeedItemDto> GetSort(List<FeedItemDto> data, int me)
         {
-            // Step A: Get all skills from the user's profile.
-            var myUserSkills = _skillRepo.GetUserSkillsWithSkill(me);
-            
+            if (data == null || data.Count == 0) return new List<FeedItemDto>();
 
-            // Step B: Create a HashSet of skill names for efficient lookups.
-            var mySkillNames = myUserSkills
-                .Select(userSkill => userSkill.Skill.Name)
-                .ToHashSet();
+            // Determine which type we are sorting (calls pass homogeneous lists)
+            var firstType = (data.First().PostType ?? string.Empty).Trim().ToUpperInvariant();
+            bool isLessons = string.Equals(firstType, "LESSON", StringComparison.OrdinalIgnoreCase);
+            bool isRequests = string.Equals(firstType, "REQUEST", StringComparison.OrdinalIgnoreCase);
 
-            if (!mySkillNames.Any())
+            // Helper: case-insensitive Contains
+            static bool ContainsAny(string haystack, HashSet<string> needles)
             {
-                Console.WriteLine("ERROR" );
-                // If the user has no skills, return the original list sorted by date.
-                return data.OrderByDescending(item => item.CreatedAt).ToList();
+                if (string.IsNullOrWhiteSpace(haystack) || needles == null || needles.Count == 0) return false;
+                foreach (var n in needles)
+                {
+                    if (string.IsNullOrWhiteSpace(n)) continue;
+                    if (haystack.IndexOf(n, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                }
+                return false;
             }
 
-            // Step C: Sort the incoming data.
-            var sortedList = data
-                .OrderByDescending(item => mySkillNames.Contains(item.Title)) // Items matching a profile skill come first
-                .ThenByDescending(item => item.CreatedAt) // Then sort by most recent
-                .ToList();
+            if (isRequests)
+            {
+                // ✅ Existing behavior: prioritize items that match my profile skills
+                var myUserSkills = _skillRepo.GetUserSkillsWithSkill(me) ?? Enumerable.Empty<dynamic>();
+                var mySkillNames = myUserSkills
+                    .Select(us => (string)us.Skill.Name)
+                    .Where(s => !string.IsNullOrWhiteSpace(s))
+                    .Select(s => s.Trim())
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            return sortedList;
+                if (!mySkillNames.Any())
+                    return data.OrderByDescending(it => it.CreatedAt).ToList();
+
+                return data
+                    .OrderByDescending(it => ContainsAny(it.Title ?? string.Empty, mySkillNames))
+                    .ThenByDescending(it => it.CreatedAt)
+                    .ToList();
+            }
+
+            if (isLessons)
+            {
+                // ✅ NEW behavior: prioritize lessons similar to requests I SENT
+                // (Use SkillName and Topic from my requests)
+                var myRequests = _requestService.GetByLearnerId(me) ?? new List<RequestWithUser>();
+
+                var requestTerms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var r in myRequests)
+                {
+                    if (!string.IsNullOrWhiteSpace(r.SkillName)) requestTerms.Add(r.SkillName.Trim());
+                    if (!string.IsNullOrWhiteSpace(r.Topic)) requestTerms.Add(r.Topic.Trim());
+                }
+
+                if (!requestTerms.Any())
+                    return data.OrderByDescending(it => it.CreatedAt).ToList();
+
+                // You could make this smarter (tokenization, fuzzy match), but simple contains works well.
+                return data
+                    .OrderByDescending(it => ContainsAny(it.Title ?? string.Empty, requestTerms))
+                    .ThenByDescending(it => it.CreatedAt)
+                    .ToList();
+            }
+
+            // Fallback (mixed or unknown types): newest first
+            return data.OrderByDescending(it => it.CreatedAt).ToList();
         }
+
     }
 }
