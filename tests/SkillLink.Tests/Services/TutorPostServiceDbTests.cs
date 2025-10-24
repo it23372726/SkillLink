@@ -200,7 +200,7 @@ SELECT CAST(SCOPE_IDENTITY() AS INT);", conn);
             var pid = await InsertPostAsync(conn, tutor, "S1", max: 5, status: "Open");
 
             var when = DateTime.UtcNow.AddDays(2);
-            _sut.Schedule(pid, when);
+            _sut.Schedule(pid, new ScheduleTutorPostDto { ScheduledAt = when });
 
             var post = _sut.GetById(pid)!;
             post.Status.Should().Be("Scheduled");

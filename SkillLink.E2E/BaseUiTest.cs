@@ -5,6 +5,8 @@ using OpenQA.Selenium.Chrome;
 using WebDriverManager;
 using WebDriverManager.DriverConfigs.Impl;
 using OpenQA.Selenium.Support.UI;
+using System.Net.Http;
+using System.Threading.Tasks;
 
 namespace SkillLink.E2E
 {
@@ -28,8 +30,8 @@ namespace SkillLink.E2E
             var opts = new ChromeOptions();
             var headless = (Environment.GetEnvironmentVariable("HEADLESS") ?? "1") != "0";
 
-            if (headless) 
-                // opts.AddArgument("--headless=new");
+            if (headless)
+                opts.AddArgument("--headless=new");
             opts.AddArgument("--window-size=1536,960");
             opts.AddArgument("--disable-gpu");
             opts.AddArgument("--no-sandbox");
@@ -39,6 +41,20 @@ namespace SkillLink.E2E
 
             Driver = new ChromeDriver(opts);
             Driver.Manage().Timeouts().ImplicitWait = TimeSpan.FromSeconds(2);
+
+            // Ensure endpoints are reachable; if not, mark tests inconclusive instead of hard-failing
+            try
+            {
+                EnsureEndpointsReachableOrSkipAsync().GetAwaiter().GetResult();
+            }
+            catch (InconclusiveException)
+            {
+                throw; // bubble up as inconclusive
+            }
+            catch (Exception ex)
+            {
+                Assert.Inconclusive($"E2E endpoints not reachable. Set E2E_WEB_URL/E2E_API_URL or start servers. Details: {ex.Message}");
+            }
         }
 
         [TearDown]
@@ -53,6 +69,37 @@ namespace SkillLink.E2E
             try { Driver?.Dispose(); } catch { /* ignore */ }
             _disposed = true;
             GC.SuppressFinalize(this);
+        }
+
+        private async Task EnsureEndpointsReachableOrSkipAsync()
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+
+            // Basic check for frontend
+            var web = FrontendUrl?.TrimEnd('/');
+            if (string.IsNullOrWhiteSpace(web))
+                Assert.Inconclusive("Frontend URL is not configured.");
+
+            try
+            {
+                using var resp = await http.GetAsync(web!);
+                if (!resp.IsSuccessStatusCode && (int)resp.StatusCode < 400)
+                {
+                    // non-success but reachable is fine
+                }
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException($"Cannot reach frontend at {web}. {ex.Message}");
+            }
+
+            // Optional: API check (don’t fail if API is down, but prefer to warn)
+            var api = ApiBaseUrl?.TrimEnd('/');
+            if (!string.IsNullOrWhiteSpace(api))
+            {
+                try { using var _ = await http.GetAsync(api!); }
+                catch (Exception ex) { TestContext.Progress.WriteLine($"[WARN] API not reachable at {api}: {ex.Message}"); }
+            }
         }
 
         // ---------- Helpers to avoid click intercepted ----------

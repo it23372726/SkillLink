@@ -147,7 +147,7 @@ namespace SkillLink.Tests.Controllers
         {
             var ctrl = Create(out var mock);
             var dto = new ScheduleTutorPostDto { ScheduledAt = DateTime.UtcNow.AddDays(1) };
-            mock.Setup(s => s.Schedule(15, dto.ScheduledAt));
+            mock.Setup(s => s.Schedule(15, It.Is<ScheduleTutorPostDto>(b => b.ScheduledAt == dto.ScheduledAt)));
 
             var res = ctrl.Schedule(15, dto);
 

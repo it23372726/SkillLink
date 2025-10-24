@@ -39,10 +39,13 @@ namespace SkillLink.Tests.Services
             var reactionRepo = new ReactionRepository(_dbHelper);
             var commentRepo  = new CommentRepository(_dbHelper);
             var feedRepo     = new FeedRepository(_dbHelper);
+            var skillRepo    = new SkillRepository(_dbHelper);
+            var requestRepo  = new RequestRepository(_dbHelper);
+            var requestSvc   = new RequestService(requestRepo);
 
             _reactions = new ReactionService(reactionRepo);
             _comments  = new CommentService(commentRepo);
-            _feed      = new FeedService(feedRepo, _reactions, _comments);
+            _feed      = new FeedService(feedRepo, _reactions, _comments, skillRepo, requestSvc);
         }
 
         [OneTimeTearDown]

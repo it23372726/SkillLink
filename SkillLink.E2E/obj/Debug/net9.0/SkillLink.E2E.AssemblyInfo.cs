@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("SkillLink.E2E")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+859e78d6b85674eac7822c781bab558aff9744e3")]
 [assembly: System.Reflection.AssemblyProductAttribute("SkillLink.E2E")]
 [assembly: System.Reflection.AssemblyTitleAttribute("SkillLink.E2E")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

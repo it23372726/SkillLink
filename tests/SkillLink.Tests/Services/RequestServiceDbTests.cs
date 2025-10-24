@@ -104,7 +104,7 @@ SELECT CAST(SCOPE_IDENTITY() AS INT);", conn);
         await Task.Delay(50);
         var newer = await InsertRequest(conn, u2, "English");
 
-        var list = _sut.GetAllRequests();
+    var list = _sut.GetAllRequests(null);
         list[0].SkillName.Should().Be("English");
         list[1].SkillName.Should().Be("Math");
     }
@@ -147,9 +147,9 @@ SELECT CAST(SCOPE_IDENTITY() AS INT);", conn);
         await InsertRequest(conn, u1, "Mathematics", "Algebra", "Equations");
         await InsertRequest(conn, u2, "Language", "Grammar", "Punctuation");
 
-        _sut.SearchRequests("math").Should().HaveCount(1);
-        _sut.SearchRequests("doe").Should().HaveCount(1);
-        _sut.SearchRequests("punct").Should().HaveCount(1);
+    _sut.SearchRequests("math", null).Should().HaveCount(1);
+    _sut.SearchRequests("doe", null).Should().HaveCount(1);
+    _sut.SearchRequests("punct", null).Should().HaveCount(1);
     }
 
     [Test]

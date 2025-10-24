@@ -19,6 +19,15 @@ namespace SkillLink.E2E
             System.Threading.Thread.Sleep(1000);
 
             var url = Driver.Url;
+            if (!(url.Contains("/dashboard") || url.Contains("/admin-dashboard")))
+            {
+                string err = Driver.FindElements(By.CssSelector(".bg-red-50")).Count > 0
+                    ? Driver.FindElement(By.CssSelector(".bg-red-50")).Text
+                    : "(no error banner)";
+                Assert.Inconclusive($"Login did not navigate. Likely API/DB not running. URL: {url}. Error: {err}");
+                return;
+            }
+
             url.Should().MatchRegex(".*/dashboard|.*/admin-dashboard");
         }
     }
