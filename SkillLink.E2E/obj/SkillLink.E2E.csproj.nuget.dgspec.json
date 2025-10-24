@@ -1,20 +1,20 @@
 {
   "format": 1,
   "restore": {
-    "/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/Repositry/SkillLink.E2E/SkillLink.E2E.csproj": {}
+    "/Users/dulajachintha/Desktop/SkillLink/SkillLink.E2E/SkillLink.E2E.csproj": {}
   },
   "projects": {
-    "/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/Repositry/SkillLink.E2E/SkillLink.E2E.csproj": {
+    "/Users/dulajachintha/Desktop/SkillLink/SkillLink.E2E/SkillLink.E2E.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/Repositry/SkillLink.E2E/SkillLink.E2E.csproj",
+        "projectUniqueName": "/Users/dulajachintha/Desktop/SkillLink/SkillLink.E2E/SkillLink.E2E.csproj",
         "projectName": "SkillLink.E2E",
-        "projectPath": "/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/Repositry/SkillLink.E2E/SkillLink.E2E.csproj",
-        "packagesPath": "/Users/akilaudara/.nuget/packages/",
-        "outputPath": "/Users/akilaudara/Desktop/SLIIT/Y3S1/CSP/Assignment/Repositry/SkillLink.E2E/obj/",
+        "projectPath": "/Users/dulajachintha/Desktop/SkillLink/SkillLink.E2E/SkillLink.E2E.csproj",
+        "packagesPath": "/Users/dulajachintha/.nuget/packages/",
+        "outputPath": "/Users/dulajachintha/Desktop/SkillLink/SkillLink.E2E/obj/",
         "projectStyle": "PackageReference",
         "configFilePaths": [
-          "/Users/akilaudara/.nuget/NuGet/NuGet.Config"
+          "/Users/dulajachintha/.nuget/NuGet/NuGet.Config"
         ],
         "originalTargetFrameworks": [
           "net9.0"

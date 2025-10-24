@@ -6,6 +6,8 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Moq;
 using NUnit.Framework;
+using SkillLink.API.Controllers;
+using SkillLink.API.Models;
 using SkillLink.API.Services.Abstractions;
 
 [TestFixture]
@@ -23,8 +25,8 @@ public class RequestsControllerUnitTests
     {
         reqMock = new Mock<IRequestService>(MockBehavior.Strict);
         accMock = new Mock<IAcceptedRequestService>(MockBehavior.Strict);
-
-        var ctrl = new RequestsController(reqMock.Object, accMock.Object);
+        var notif = new Mock<INotificationService>(MockBehavior.Loose);
+        var ctrl = new RequestsController(reqMock.Object, accMock.Object, notif.Object);
         ctrl.ControllerContext = new ControllerContext
         {
             HttpContext = new DefaultHttpContext { User = FakeUser(currentUserId) }
@@ -48,11 +50,11 @@ public class RequestsControllerUnitTests
             new RequestWithUser { RequestId = 1, SkillName = "Math", FullName = "Alice" }
         };
 
-        req.Setup(s => s.SearchRequests("ma")).Returns(expected);
+    req.Setup(s => s.SearchRequests("ma", It.IsAny<int?>())).Returns(expected);
         var res = ctrl.Search("ma");
         res.Should().BeOfType<OkObjectResult>();
         (res as OkObjectResult)!.Value.Should().BeEquivalentTo(expected);
-        req.Verify(s => s.SearchRequests("ma"), Times.Once);
+    req.Verify(s => s.SearchRequests("ma", It.IsAny<int?>()), Times.Once);
     }
 
     [Test]
@@ -166,6 +168,7 @@ public class RequestsControllerUnitTests
     {
         var me = 77;
         var ctrl = Create(out var req, out var acc, me);
+        req.Setup(s => s.GetById(15)).Returns(new RequestWithUser{ RequestId = 15, LearnerId = 5, SkillName = "X", IsPrivate = false });
         acc.Setup(s => s.AcceptRequest(15, me));
         var res = ctrl.AcceptRequest(15);
         res.Should().BeOfType<OkObjectResult>();
@@ -177,6 +180,7 @@ public class RequestsControllerUnitTests
     {
         var me = 77;
         var ctrl = Create(out var req, out var acc, me);
+        req.Setup(s => s.GetById(15)).Returns(new RequestWithUser{ RequestId = 15, LearnerId = 5, SkillName = "X", IsPrivate = false });
         acc.Setup(s => s.AcceptRequest(15, me)).Throws(new Exception("Already accepted"));
         var res = ctrl.AcceptRequest(15);
         res.Should().BeOfType<BadRequestObjectResult>();
@@ -209,7 +213,9 @@ public class RequestsControllerUnitTests
     [Test]
     public void ScheduleMeeting_ShouldReturnOk()
     {
-        var ctrl = Create(out var req, out var acc, 77);
+        var me = 77;
+        var ctrl = Create(out var req, out var acc, me);
+        acc.Setup(s => s.GetAcceptedMeta(10)).Returns(new AcceptedMeta { AcceptedRequestId = 10, AcceptorId = me, RequesterId = 5, Status = "ACCEPTED" });
         acc.Setup(s => s.ScheduleMeeting(10, It.IsAny<DateTime>(), "Zoom", "https://zoom.us/xyz"));
 
         var payload = new ScheduleMeetingRequest {
