@@ -31,6 +31,7 @@ namespace SkillLink.API.Controllers
         [HttpGet("verify-email")]
         public IActionResult VerifyEmail([FromQuery] string token)
         {
+            Console.WriteLine($"[VerifyEmail] token(len={token?.Length}): {token}");
             if (string.IsNullOrWhiteSpace(token))
                 return BadRequest(new { message = "Missing token" });
 
