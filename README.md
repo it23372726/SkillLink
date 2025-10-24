@@ -120,7 +120,7 @@ npm run dev
 Open Terminal 2 → start frontend:
 ⁠ bash
 cd Backend-Resourcely/Backend-Resourcely
-dotnet run
+dotnet run..
 
 
 
