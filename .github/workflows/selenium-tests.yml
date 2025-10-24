@@ -1,13 +1,24 @@
 name: SkillLink Selenium UI Tests
 
 on:
-  workflow_dispatch:
   pull_request:
-    branches: [ main, dev ]
+    branches: [ main ]           # run on PRs to main (needed for required checks)
+    paths-ignore:
+      - '**/*.md'
+  workflow_dispatch:              # manual run if you want
+
+permissions:
+  contents: read                  # safe for PRs
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true        # auto-cancel older runs on same PR
 
 jobs:
   selenium-tests:
+    name: Selenium UI Tests       # <-- this is the check name you'll select in Branch Protection
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     services:
       mssql:
@@ -15,8 +26,7 @@ jobs:
         env:
           SA_PASSWORD: "Your_strong_Passw0rd!"
           ACCEPT_EULA: "Y"
-        ports:
-          - 1433:1433
+        ports: [ "1433:1433" ]
       selenium:
         image: selenium/standalone-chrome
         ports: [ "4444:4444" ]
@@ -37,10 +47,9 @@ jobs:
           echo "ConnectionStrings__DefaultConnection=Server=localhost,1433;Database=SkillLinkTestDB;User Id=sa;Password=Your_strong_Passw0rd!;" >> $GITHUB_ENV
           dotnet run --project SkillLink.API/SkillLink.API.csproj --no-build &
           sleep 15
-      
+
       - name: Run Selenium Tests
         run: dotnet test SkillLink.E2E/SkillLink.E2E.csproj --no-build --verbosity normal
-
 
       - name: Upload Selenium Test Results
         if: always()
