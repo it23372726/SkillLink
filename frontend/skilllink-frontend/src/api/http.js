@@ -13,6 +13,8 @@ import axios from "axios";
 //   "http://localhost:5159";
 
   export const API_BASE = process.env.REACT_APP_API_BASE || (typeof window !== "undefined" && window.__SL_API_BASE) ||"http://localhost:5159";
+  console.log("env : ", process.env.REACT_APP_API_BASE);
+  console.log("base url : ", API_BASE);
 
 const http = axios.create({
   baseURL: `${API_BASE}/api`,
