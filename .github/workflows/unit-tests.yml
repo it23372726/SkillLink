@@ -1,15 +1,26 @@
 name: SkillLink Unit Tests
 
 on:
-  push:
-    branches: [ main, dev ]   # ✅ Runs automatically before deployment
   pull_request:
-    branches: [ main, dev ]
-  workflow_dispatch:          # ✅ Allows manual trigger from GitHub UI
+    branches: [ main ]            # needed so it can be selected as a required check
+    paths-ignore:
+      - '**/*.md'
+  push:
+    branches: [ main, dev ]       # still run on pushes if you want
+  workflow_dispatch:
+
+permissions:
+  contents: read                   # safe for PRs
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   unit-tests:
+    name: Unit Tests               # <-- this is the check name you'll select in Branch Protection
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     services:
       mssql:
@@ -21,29 +32,23 @@ jobs:
           - 1433:1433
 
     steps:
-      # Checkout repository
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Setup .NET 8
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
-      # Wait for SQL to be ready
       - name: Wait for SQL Server
         run: sleep 30
 
-      # Configure test database connection
       - name: Configure DB Connection
         run: echo "ConnectionStrings__DefaultConnection=Server=localhost,1433;Database=SkillLinkTestDB;User Id=sa;Password=Your_strong_Passw0rd!;" >> $GITHUB_ENV
 
-      # Run Unit Tests with Code Coverage
       - name: Run Unit Tests
         run: dotnet test SkillLink.sln --no-build --verbosity normal --collect:"XPlat Code Coverage"
 
-      # Upload Test Results even if tests fail
       - name: Upload Test Results
         if: always()
         uses: actions/upload-artifact@v4
