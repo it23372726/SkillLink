@@ -1,10 +1,3 @@
----
-title: "SkillLink API Documentation"
-author: "SkillLink Team"
-date: "2025-11-19"
-toc: true
-toc-depth: 3
----
 
 # Overview
 
